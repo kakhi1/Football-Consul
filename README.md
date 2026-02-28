@@ -1,0 +1,149 @@
+# Football Consul
+
+Football Consul is an AI-powered Telegram bot and web scraper designed to analyze Premier League football statistics.
+
+It uses Playwright and BeautifulSoup to extract match stats and lineups from Flashscore into a local SQLite database, and a Gemini-powered Telegram agent to translate natural language user questions into SQL queries.
+
+---
+
+## 🚀 Features
+
+- **Automated Data Extraction**  
+  Scrapes match stats, xG, possession, and lineups using `playwright` and `bs4`.
+
+- **Normalized SQLite Database**  
+  Stores matches, teams, players, and match lineups.
+
+- **Text-to-SQL AI Agent**  
+  Uses Google's Gemini to parse user questions on Telegram, query the local database, and return conversational, mathematically accurate insights.
+
+---
+
+## 📦 Prerequisites
+
+- Python 3.8+
+- A Telegram Bot Token (from BotFather)
+- A Google Gemini API Key
+
+---
+
+## ⚙️ Setup Instructions
+
+### 1️⃣ Clone the Repository
+
+```bash
+git clone <your-repo-url>
+cd football-consul
+```
+
+---
+
+### 2️⃣ Create and Activate a Virtual Environment
+
+**Mac / Linux:**
+
+```bash
+python -m venv venv
+source venv/bin/activate
+```
+
+**Windows:**
+
+```bash
+python -m venv venv
+venv\Scripts\activate
+```
+
+---
+
+### 3️⃣ Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+### 4️⃣ Install Playwright Browsers
+
+⚠️ This step is strictly required for the web scraper to function.
+
+```bash
+playwright install chromium
+```
+
+---
+
+### 5️⃣ Configure Environment Variables
+
+Create a `.env` file in the root directory and add:
+
+```env
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+GOOGLE_API_KEY=your_gemini_api_key_here
+GOOGLE_MODEL_NAME=gemini-2.5-flash
+```
+
+You may change the model name to your preferred Gemini model if needed.
+
+---
+
+## 🛠 Usage
+
+### Step 1: Build the Database
+
+Run the parser to scrape the latest Premier League data and populate `football_consul.db`:
+
+```bash
+python main_parser.py
+```
+
+---
+
+### Step 2: Start the Telegram Bot
+
+```bash
+python chat.py
+```
+
+Send `/start` to your bot on Telegram and ask questions like:
+
+> How many goals did Aston Villa score at home this season?  
+> Which team has the highest average possession?  
+> Show Arsenal's last 5 match results.
+
+---
+
+## 🧠 How It Works
+
+1. Playwright scrapes Flashscore match data.
+2. BeautifulSoup parses and normalizes the HTML.
+3. Data is stored in a structured SQLite database.
+4. Gemini converts natural language questions into SQL queries.
+5. The bot executes the query and returns an intelligent response.
+
+---
+
+## 📁 Project Structure (Example)
+
+```
+football-consul/
+│
+├── main_parser.py
+├── chat.py
+├── database.py
+├── football_consul.db
+├── requirements.txt
+├── .env
+└── README.md
+```
+
+---
+
+## ⚠️ Notes
+
+- Always run the parser before starting the bot if you need fresh data.
+- Make sure your Telegram token and Gemini API key are valid.
+- The scraper depends on Flashscore’s HTML structure. Changes to the site may require parser updates.
+
+---

@@ -15,7 +15,7 @@ It uses Playwright and BeautifulSoup to extract match stats and lineups into a l
   Stores matches, teams, players, and match lineups.
 
 - Text-to-SQL AI Agent  
-  Uses Google's Gemini to parse user questions on Telegram, query the local database, and return conversational, mathematically accurate insights.
+  Uses Google's Gemini to parse user questions, query the local database, and return conversational, mathematically accurate insights. Now supports both **Telegram** and **Terminal** interfaces.
 
 ---
 
@@ -82,6 +82,7 @@ Create a `.env` file in the root directory and add:
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 GOOGLE_API_KEY=your_gemini_api_key_here
 GOOGLE_MODEL_NAME=gemini-2.5-flash
+PLATFORM=telegram  # Set to 'telegram' for the bot, or 'terminal' for local CLI chat
 ```
 
 You may change the model name to your preferred Gemini model if needed.
@@ -100,17 +101,22 @@ python main_parser.py
 
 ---
 
-### Step 2: Start the Telegram Bot
+### Step 2: Start the AI Agent
+
+First, ensure your `PLATFORM` variable in the `.env` file is set to your desired mode (`telegram` or `terminal`).
 
 ```bash
-python chat.py
+python app.py
 ```
 
-Send `/start` to your bot on Telegram and ask questions like:
+- **If you are using Telegram (`PLATFORM=telegram`):**
+  Send `/start` to your bot on Telegram and ask questions like:
+  - How many goals did a team score at home this season?
+  - Which team has the highest average possession?
+  - Show the last 5 match results for a specific team.
 
-- How many goals did a team score at home this season?
-- Which team has the highest average possession?
-- Show the last 5 match results for a specific team.
+- **If you are using the Terminal (`PLATFORM=terminal`):**
+  Type your questions directly into the command line prompt to chat with the AI locally and view your token usage.
 
 ---
 

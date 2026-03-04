@@ -15,6 +15,6 @@ football_consul.db
 
 # Excluded Files
 chat_old.py
-
+check_everton.py
 # Playwright
 .playwright/

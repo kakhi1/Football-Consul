@@ -2,7 +2,7 @@
 
 Football Consul is an AI-powered Telegram bot and web scraper designed to analyze football statistics.
 
-It uses Playwright and BeautifulSoup to extract match stats and lineups into a local SQLite database, and a Gemini-powered Telegram agent to translate natural language user questions into SQL queries.
+It uses Playwright and BeautifulSoup to extract match stats and lineups into a local SQLite database. It features an AI agent that translates natural language user questions into SQL queries, supporting both cloud-based (Google Gemini) and local (Ollama) Large Language Models.
 
 ---
 
@@ -17,6 +17,8 @@ It uses Playwright and BeautifulSoup to extract match stats and lineups into a l
 - Text-to-SQL AI Agent  
   Uses Google's Gemini to parse user questions, query the local database, and return conversational, mathematically accurate insights. Now supports both **Telegram** and **Terminal** interfaces.
 
+- **Multi-Model Local Support (Experimental):** Run entirely locally using Ollama with a dual-model pipeline (one model for conversation, one strict logic model for SQL generation).
+
 ---
 
 ## Prerequisites
@@ -24,6 +26,7 @@ It uses Playwright and BeautifulSoup to extract match stats and lineups into a l
 - Python 3.8+
 - A Telegram Bot Token (from BotFather)
 - A Google Gemini API Key
+- _Optional:_ [Ollama](https://ollama.com/) installed locally (if you plan to use local models)
 
 ---
 
@@ -83,6 +86,11 @@ TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 GOOGLE_API_KEY=your_gemini_api_key_here
 GOOGLE_MODEL_NAME=gemini-2.5-flash
 PLATFORM=telegram  # Set to 'telegram' for the bot, or 'terminal' for local CLI chat
+AI_MODEL=google           # Set to 'google' for Gemini, or 'ollama' for local models
+
+# Ollama Configuration (Used if AI_MODEL=ollama)
+OLLAMA_MODEL=llama3.1               # The conversational model
+SECOND_OLLAMA_MODEL=qwen2.5-coder   # The logic/SQL engine model
 ```
 
 You may change the model name to your preferred Gemini model if needed.

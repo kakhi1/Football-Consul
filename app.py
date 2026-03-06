@@ -1,8 +1,7 @@
 import sqlite3
 import os
 import logging
-from google import genai
-from google.genai import types
+import json
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -10,31 +9,35 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 # 1. Setup & Environment
 load_dotenv()
 PLATFORM = os.getenv("PLATFORM", "terminal").lower()
+AI_MODEL = os.getenv("AI_MODEL", "google").lower()
 
-# Only enable basic Telegram logging if we are in Telegram mode to avoid terminal clutter
+# Model 1: The Conversationalist (Summarizes data and talks to the user)
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
+# Model 2: The Logic Engine (Strictly for analyzing queries and calling SQL tools)
+SECOND_OLLAMA_MODEL = os.getenv("SECOND_OLLAMA_MODEL", "qwen2.5-coder")
+
+# --- INITIALIZE GOOGLE CLIENT GLOBALLY SO IT DOESN'T CLOSE ---
+google_client = None
+if AI_MODEL != "ollama":
+    from google import genai
+    from google.genai import types
+    google_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+
 if PLATFORM == "telegram":
     logging.basicConfig(
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         level=logging.INFO
     )
 
-# 2. Tools & Memory (From chat_old.py)
+# 2. Tools & Memory
 agent_memory = {}
 
 
-def manage_memory(action: str, data: dict[str, str]) -> str:
-    """
-    Saves or retrieves important stats to/from memory to use in future SQL queries.
-    Args:
-        action: 'save' or 'read'
-        data: A dictionary of key-value pairs. 
-              For 'save': {'aston_villa_avg_corners': '5.4', 'chelsea_avg_goals': '2.1'}
-              For 'read': {'aston_villa_avg_corners': '', 'chelsea_avg_goals': ''}
-    """
+def manage_memory(action: str, data: dict) -> str:
+    """Saves or retrieves important stats to/from memory to use in future SQL queries."""
     if action == 'save':
         for key, value in data.items():
             agent_memory[key] = str(value)
-            # Hide prints in Telegram mode
             if PLATFORM != "telegram":
                 print(f"\n🧠 [Memory Saved]: {key} -> {value}")
         return f"Successfully saved {len(data)} items to memory."
@@ -51,13 +54,7 @@ def manage_memory(action: str, data: dict[str, str]) -> str:
 
 
 def execute_sql_query(query: str, agent_understanding: str = "") -> str:
-    """
-    Executes a SQL query on the football_consul.db SQLite database.
-    Args:
-        query: The SQL query to run.
-        agent_understanding: A mandatory 1-sentence explanation of what you think the user wants, explicitly stating which columns (e.g., home vs away) you need to use.
-    """
-    # Hide prints in Telegram mode
+    """Executes a SQL query on the football_consul.db SQLite database."""
     if PLATFORM != "telegram":
         print(f"\n🤔 [Agent Thinking]: {agent_understanding}")
         print(f"🗄️ [Running SQL]: {query}")
@@ -73,9 +70,12 @@ def execute_sql_query(query: str, agent_understanding: str = "") -> str:
         return f"SQL Error: {e}"
 
 
-# 3. Initialize the GenAI Client & System Instructions
-client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+available_functions = {
+    'execute_sql_query': execute_sql_query,
+    'manage_memory': manage_memory,
+}
 
+# 3. System Instructions & Schemas
 system_instruction = """
 You are 'Football Consul', an expert AI football data analyst.
 You have access to a tool called `execute_sql_query`. Use it to query the SQLite database to answer user questions.
@@ -137,51 +137,185 @@ CRITICAL RULES:
 9. UNDERSTANDING FIRST: When using the `execute_sql_query` tool, you MUST fill out the `agent_understanding` parameter. Briefly explain who the subject is and exactly which columns you are targeting before writing the SQL.
 """
 
-# Define the tools list to be injected into the chat configurations
-tools_list = [execute_sql_query, manage_memory]
+ollama_tools = [
+    {
+        'type': 'function',
+        'function': {
+            'name': 'execute_sql_query',
+            'description': 'Executes a SQL query on the SQLite database.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'query': {'type': 'string', 'description': 'The SQL query to run.'},
+                    'agent_understanding': {'type': 'string', 'description': 'A 1-sentence explanation of what you think the user wants.'}
+                },
+                'required': ['query', 'agent_understanding']
+            }
+        }
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'manage_memory',
+            'description': 'Saves or retrieves stats to/from memory.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'action': {'type': 'string', 'enum': ['save', 'read']},
+                    'data': {'type': 'object', 'description': 'Dictionary of key-value pairs.'}
+                },
+                'required': ['action', 'data']
+            }
+        }
+    }
+]
 
-# --- 4. TELEGRAM LOGIC ---
+# --- 4. OLLAMA MULTI-MODEL WRAPPER ---
+
+
+class OllamaMultiModelSession:
+    """Handles standard conversation with Model 1, and delegates Tool/SQL execution to Model 2."""
+
+    def __init__(self, system_prompt, chat_model, logic_model):
+        import ollama
+        self.ollama = ollama
+        self.chat_model = chat_model
+        self.logic_model = logic_model
+        self.messages = [{'role': 'system', 'content': system_prompt}]
+
+    class MockResponse:
+        def __init__(self, text):
+            self.text = text
+
+    def send_message_sync(self, text):
+        self.messages.append({'role': 'user', 'content': text})
+
+        # STEP 1: Ask the Logic Model (SECOND_OLLAMA_MODEL) if a tool/SQL is needed
+        if PLATFORM != "telegram":
+            print(f"⚙️ [Routing to {self.logic_model} for logic analysis...]")
+
+        logic_response = self.ollama.chat(
+            model=self.logic_model,
+            messages=self.messages,
+            tools=ollama_tools
+        )
+
+        logic_message = logic_response['message']
+        self.messages.append(logic_message)
+
+        # Grab official tool calls if the model used the API correctly
+        tool_calls_to_execute = logic_message.get('tool_calls', [])
+
+        # --- JSON FALLBACK PARSER ---
+        # If no official tools were triggered, check if the model just printed raw JSON text
+        if not tool_calls_to_execute and logic_message.get('content'):
+            try:
+                # Try to load the text as JSON
+                parsed_content = json.loads(logic_message['content'].strip())
+                # Check if it looks like our tool format
+                if isinstance(parsed_content, dict) and "name" in parsed_content and "arguments" in parsed_content:
+                    if PLATFORM != "telegram":
+                        print(
+                            "🔧 [Caught raw JSON text and converting it to a tool call...]")
+                    tool_calls_to_execute = [{'function': parsed_content}]
+            except json.JSONDecodeError:
+                pass  # It's just normal text, move on
+
+        # If STILL no tools to execute, return the text directly to the user
+        if not tool_calls_to_execute:
+            return self.MockResponse(logic_message['content'])
+
+        # STEP 2: Execute the tools
+        for tool in tool_calls_to_execute:
+            func_name = tool['function']['name']
+            func_args = tool['function']['arguments']
+
+            if func_name in available_functions:
+                function_to_call = available_functions[func_name]
+                try:
+                    # Convert string args to dict if the model messed up formatting
+                    if isinstance(func_args, str):
+                        func_args = json.loads(func_args)
+                    function_response = function_to_call(**func_args)
+                except Exception as e:
+                    function_response = f"Error executing tool: {e}"
+
+                # Append the raw database result to the history
+                self.messages.append({
+                    'role': 'tool',
+                    'content': str(function_response),
+                    'name': func_name
+                })
+
+        # STEP 3: Pass the history (now containing the raw SQL data) to the Chat Model (OLLAMA_MODEL)
+        if PLATFORM != "telegram":
+            print(f"🗣️ [Routing to {self.chat_model} to generate response...]")
+
+        chat_response = self.ollama.chat(
+            model=self.chat_model,
+            messages=self.messages
+        )
+
+        final_message = chat_response['message']
+        self.messages.append(final_message)
+
+        return self.MockResponse(final_message['content'])
+
+
+def create_chat_session():
+    """Factory to create either a Google or Ollama chat session."""
+    if AI_MODEL == "ollama":
+        if PLATFORM != "telegram":
+            print(
+                f"🔧 Using Ollama Pipeline | Logic: {SECOND_OLLAMA_MODEL} | Chat: {OLLAMA_MODEL}")
+        return OllamaMultiModelSession(system_instruction, OLLAMA_MODEL, SECOND_OLLAMA_MODEL)
+    else:
+        if PLATFORM != "telegram":
+            print("☁️ Using Google Gemini")
+        # Use the global client here!
+        return google_client.chats.create(
+            model=os.getenv("GOOGLE_MODEL_NAME"),
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                tools=[execute_sql_query, manage_memory],
+                temperature=0.0,
+            )
+        )
+
+
+# --- 5. TELEGRAM LOGIC ---
 user_chats = {}
 
 
 def get_or_create_chat(chat_id):
-    """Retrieves an existing chat session for a user or creates a new one (Async)."""
     if chat_id not in user_chats:
-        user_chats[chat_id] = client.aio.chats.create(
-            model=os.getenv("GOOGLE_MODEL_NAME"),
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                tools=tools_list,
-                temperature=0.0,
-            )
-        )
+        user_chats[chat_id] = create_chat_session()
     return user_chats[chat_id]
 
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the /start command."""
-    await update.message.reply_text("⚽ Football Consul is ready! Send me a message to analyze some stats.")
-
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles incoming text messages for Telegram."""
     user_input = update.message.text
     chat_id = update.message.chat_id
-
-    # Show the "typing..." indicator in Telegram
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
 
     try:
         chat_session = get_or_create_chat(chat_id)
-        response = await chat_session.send_message(user_input)
 
-        # Send ONLY the response text to Telegram (no token usage)
+        if AI_MODEL == "ollama":
+            response = chat_session.send_message_sync(user_input)
+        else:
+            response = chat_session.send_message(user_input)
+
         await update.message.reply_text(response.text)
 
     except Exception as e:
         error_msg = f"⚠️ Oops, I hit an error: {e}"
         print(error_msg)
         await update.message.reply_text(error_msg)
+
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⚽ Football Consul is ready! Send me a message to analyze some stats.")
 
 
 def run_telegram_bot():
@@ -193,21 +327,13 @@ def run_telegram_bot():
     print("⚽ Bot is polling for messages! Press Ctrl+C to stop.")
     app.run_polling()
 
+# --- 6. TERMINAL LOGIC ---
 
-# --- 5. TERMINAL LOGIC ---
+
 def run_terminal_chat():
     print("🤖 Starting Terminal Mode...")
-    # Use standard synchronous client for the terminal loop
-    chat = client.chats.create(
-        model=os.getenv("GOOGLE_MODEL_NAME"),
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            tools=tools_list,
-            temperature=0.0,
-        )
-    )
-
-    print("⚽ Football Consul (Native) is ready! Type 'exit' to close.")
+    chat = create_chat_session()
+    print("⚽ Football Consul is ready! Type 'exit' to close.")
     print("-" * 50)
 
     while True:
@@ -216,20 +342,19 @@ def run_terminal_chat():
             break
 
         try:
-            response = chat.send_message(user_input)
-            print(f"\n⚽ Football Consul: {response.text}")
+            if AI_MODEL == "ollama":
+                response = chat.send_message_sync(user_input)
+            else:
+                response = chat.send_message(user_input)
 
-            # Print token usage in terminal only
-            usage = response.usage_metadata
-            print(
-                f"\n📊 [Token Usage] Prompt: {usage.prompt_token_count} | Response: {usage.candidates_token_count} | Total: {usage.total_token_count}")
+            print(f"\n⚽ Football Consul: {response.text}")
             print("-" * 50)
 
         except Exception as e:
             print(f"\n⚠️ Oops, I hit an error: {e}")
 
 
-# --- 6. MAIN EXECUTION ROUTER ---
+# --- 7. MAIN EXECUTION ROUTER ---
 if __name__ == '__main__':
     if PLATFORM == "telegram":
         run_telegram_bot()

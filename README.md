@@ -138,9 +138,60 @@ python app.py
 
 ---
 
+## Example Usage (Terminal Mode)
+
+When running the bot in the terminal (`PLATFORM=terminal`), you can see exactly how the AI translates your natural language into SQL queries, executes them against the database, and returns the results.
+
+Here is an example of a session analyzing team stats:
+
+```text
+🤖 Starting Terminal Mode...
+☁️ Using Google Gemini
+⚽ Football Consul is ready! Type 'exit' to close.
+--------------------------------------------------
+
+You: show ossasuna avarage fouls and corners
+
+🤔 [Agent Thinking]: The user is asking for the average fouls and corners for Osasuna. I need to query the match_stats table, combining home and away stats for Osasuna using UNION ALL to calculate the average fouls and corners.
+🗄️ [Running SQL]:
+SELECT
+  AVG(team_fouls) AS average_fouls,
+  AVG(team_corners) AS average_corners
+FROM (
+  SELECT home_fouls AS team_fouls, home_corners AS team_corners FROM match_stats WHERE home_team LIKE '%Osasuna%'
+  UNION ALL
+  SELECT away_fouls AS team_fouls, away_corners AS team_corners FROM match_stats WHERE away_team LIKE '%Osasuna%'
+);
+
+🧠 [Memory Saved]: osasuna_average_fouls -> 13.538
+🧠 [Memory Saved]: osasuna_average_corners -> 3.192
+
+⚽ Football Consul: Osasuna averages approximately 13.54 fouls and 3.19 corners per match.
+--------------------------------------------------
+
+You: when ossasuna plays at home, show all teams, what have avarage corners less 3.5
+
+🤔 [Agent Thinking]: The user wants to see which teams, when playing away against Osasuna at home, had an average of less than 3.5 corners. I need to filter for Osasuna as the home team, group by the away team, and then filter those groups where the average away corners is less than 3.5.
+🗄️ [Running SQL]:
+SELECT
+  away_team AS opponent_team,
+  AVG(away_corners) AS average_opponent_corners
+FROM match_stats
+WHERE home_team LIKE '%Osasuna%'
+GROUP BY away_team
+HAVING AVG(away_corners) < 3.5;
+
+⚽ Football Consul: When Osasuna plays at home, the following teams had an average of less than 3.5 corners:
+* Alaves: 0.0 corners
+* Celta Vigo: 2.0 corners
+* Elche: 3.0 corners
+* Levante: 3.0 corners
+* Real Sociedad: 3.0 corners
+* Villarreal: 2.0 corners
 ## Project Structure (Example)
 
 ```
+
 football-consul/
 │
 ├── main_parser.py
@@ -150,6 +201,7 @@ football-consul/
 ├── requirements.txt
 ├── .env
 └── README.md
+
 ```
 
 ---
@@ -161,3 +213,4 @@ football-consul/
 - The scraper depends on the target website’s HTML structure. Changes to the site may require parser updates.
 
 ---
+```

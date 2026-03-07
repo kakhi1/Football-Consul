@@ -188,10 +188,14 @@ HAVING AVG(away_corners) < 3.5;
 * Levante: 3.0 corners
 * Real Sociedad: 3.0 corners
 * Villarreal: 2.0 corners
+--------------------------------------------------
+```
+
+---
+
 ## Project Structure (Example)
 
 ```
-
 football-consul/
 │
 ├── main_parser.py
@@ -201,7 +205,6 @@ football-consul/
 ├── requirements.txt
 ├── .env
 └── README.md
-
 ```
 
 ---
@@ -213,4 +216,3 @@ football-consul/
 - The scraper depends on the target website’s HTML structure. Changes to the site may require parser updates.
 
 ---
-```

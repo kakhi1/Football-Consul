@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import sqlite3
 import os
 import logging
@@ -5,7 +6,8 @@ import json
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-
+import platform
+import subprocess
 # 1. Setup & Environment
 load_dotenv()
 PLATFORM = os.getenv("PLATFORM", "terminal").lower()
@@ -33,6 +35,39 @@ if PLATFORM == "telegram":
 agent_memory = {}
 
 
+def generate_bar_chart(labels: list[str], values: list[float], title: str, ylabel: str) -> str:
+    """Generates a bar chart, saves it as 'chart.png', and clears memory."""
+    if PLATFORM != "telegram":
+        print(f"📊 [Drawing Chart]: {title}")
+
+    try:
+        plt.figure(figsize=(8, 5))
+        plt.bar(labels, values, color='#1DA1F2')
+        plt.title(title)
+        plt.ylabel(ylabel)
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+
+        plt.savefig('chart.png')
+
+        # --- NEW: AUTO-OPEN CHART IN TERMINAL MODE ---
+        if PLATFORM == "terminal":
+            try:
+                if platform.system() == 'Windows':
+                    os.startfile('chart.png')
+                elif platform.system() == 'Darwin':  # macOS
+                    subprocess.call(('open', 'chart.png'))
+                else:  # Linux
+                    subprocess.call(('xdg-open', 'chart.png'))
+            except Exception as e:
+                print(f"⚠️ Could not open image automatically: {e}")
+
+        plt.close()
+        return "SUCCESS: Chart saved as chart.png. Tell the user you have drawn the chart and provide the text breakdown."
+    except Exception as e:
+        return f"ERROR: Could not generate chart. {e}"
+
+
 def manage_memory(action: str, data: dict) -> str:
     """Saves or retrieves important stats to/from memory to use in future SQL queries."""
     if action == 'save':
@@ -43,8 +78,15 @@ def manage_memory(action: str, data: dict) -> str:
         return f"Successfully saved {len(data)} items to memory."
 
     elif action == 'read':
+        # FIX: Handle if the AI sends {"keys": ["team_a", "team_b"]} instead of a direct dict
+        if 'keys' in data and isinstance(data['keys'], list):
+            keys_to_read = data['keys']
+        else:
+            keys_to_read = data.keys()
+
         retrieved = {key: agent_memory.get(
-            key, "Not found") for key in data.keys()}
+            key, "Not found") for key in keys_to_read}
+
         for key, val in retrieved.items():
             if PLATFORM != "telegram":
                 print(f"\n🧠 [Memory Accessed]: {key} -> {val}")
@@ -65,14 +107,39 @@ def execute_sql_query(query: str, agent_understanding: str = "") -> str:
         cursor.execute(query)
         result = cursor.fetchall()
         conn.close()
+
+        # --- NEW: ANTI-HALLUCINATION LOGIC FOR MISSING DATA ---
+        # If the result is completely empty, or just a tuple with a None value (like from a SUM that found nothing)
+        if not result or result == [(None,)]:
+            if PLATFORM != "telegram":
+                print("⚠️ [Database Returned No Data]")
+
+            empty_response = {
+                "status": "SUCCESS_BUT_EMPTY",
+                "message": "The SQL query was valid, but 0 rows matched the condition.",
+                "INSTRUCTION": "The database does not contain this information (the team, player, or match might not be scraped yet). You MUST tell the user honestly that you do not have data for this request. DO NOT guess. DO NOT say the answer is 0."
+            }
+            return json.dumps(empty_response)
+
+        # If data exists, return it normally
         return str(result)
+
     except Exception as e:
-        return f"SQL Error: {e}"
+        if PLATFORM != "telegram":
+            print(f"⚠️ [Database Error]: {e}")
+
+        error_response = {
+            "CRITICAL_FAILURE": True,
+            "ERROR_MESSAGE": str(e),
+            "INSTRUCTION": "The SQL query failed. You are STRICTLY FORBIDDEN from guessing the answer. You MUST correct the syntax and call the execute_sql_query tool again."
+        }
+        return json.dumps(error_response)
 
 
 available_functions = {
     'execute_sql_query': execute_sql_query,
     'manage_memory': manage_memory,
+    'generate_bar_chart': generate_bar_chart,
 }
 
 # 3. System Instructions & Schemas
@@ -81,13 +148,19 @@ You are 'Football Consul', an expert AI football data analyst.
 You have access to a tool called `execute_sql_query`. Use it to query the SQLite database to answer user questions.
 
 DATABASE SCHEMA:
-Table name: `match_stats`
+
+Table: `match_stats`
 Columns: 
 - match_id (TEXT)
+- match_date (TEXT, Format: YYYY-MM-DD HH:MM)
+- competition (TEXT, e.g., 'LaLiga', 'Champions League', 'Premier League')
+- match_stage (TEXT, e.g., 'Regular Season', 'Quarter-finals', 'Group Stage')
 - home_team (TEXT)
 - away_team (TEXT)
 - home_score (INTEGER)
 - away_score (INTEGER)
+- home_formation (TEXT)
+- away_formation (TEXT)
 - home_xg (REAL)
 - away_xg (REAL)
 - home_possession_pct (INTEGER)
@@ -100,8 +173,8 @@ Columns:
 - away_corners (INTEGER)
 - home_fouls (INTEGER)
 - away_fouls (INTEGER)
-- away_offsides (INTEGER)
 - home_offsides (INTEGER)
+- away_offsides (INTEGER)
 - home_blocked_shots (INTEGER)
 - away_blocked_shots (INTEGER)
 - home_yellow_cards (INTEGER)
@@ -112,6 +185,21 @@ Columns:
 - away_passes_pct (INTEGER)
 - home_goalkeeper_saves (INTEGER)
 - away_goalkeeper_saves (INTEGER)
+
+Table: `players`
+Columns: 
+- player_id (TEXT)
+- name (TEXT)
+
+Table: `match_lineups`
+Columns: 
+- lineup_id (INTEGER)
+- match_id (TEXT, Foreign Key to match_stats)
+- player_id (TEXT, Foreign Key to players)
+- team_type (TEXT, 'Home' or 'Away')
+- shirt_number (TEXT)
+- is_starter (BOOLEAN)
+- rating (REAL)
 
 CRITICAL RULES:
 1. Always use the `LIKE` operator with wildcards for team names (e.g., `WHERE home_team LIKE '%Villa%'`).
@@ -127,7 +215,6 @@ CRITICAL RULES:
    - Step 2: Build the Unified Team Perspective subquery (from Rule 6), ensuring the 'venue' column is included.
    - Step 3: GROUP BY opponent_team AND venue on that unified subquery.
    - Step 4: Use a HAVING clause to compare the venue-specific head-to-head average against the overall average CTE.
-   - Example Output format: "Wolves (Home): 9 corners", "Wolves (Away): 8 corners".
 8. MEMORY USAGE (CRITICAL EXECUTION ORDER):
    You have access to a `manage_memory` tool. You must follow this exact sequence:
    - STEP 1 (Calculate): When asked for a baseline stat or average, use `execute_sql_query`.
@@ -135,6 +222,31 @@ CRITICAL RULES:
    - STEP 3 (Reply): Present the answer to the user.
    - STEP 4 (Recall): If the user asks a follow-up question requiring past stats, use `manage_memory` with action='read' to retrieve the exact value BEFORE writing your next SQL query.
 9. UNDERSTANDING FIRST: When using the `execute_sql_query` tool, you MUST fill out the `agent_understanding` parameter. Briefly explain who the subject is and exactly which columns you are targeting before writing the SQL.
+10. TEMPORAL DATA: Use the `match_date` column for questions about a team's 'last match' or 'recent games'. Example: `ORDER BY match_date DESC LIMIT 5`.
+11. COMPETITIONS & STAGES: Use `competition` and `match_stage` to filter for specific tournaments or knockout rounds (e.g., `WHERE competition = 'Champions League' AND match_stage != 'Group Stage'`).
+12. ERROR HANDLING: If your tool returns a string starting with "SQL Error", you made a syntax mistake. Do not tell the user there is an error; immediately execute a new, corrected SQL query.
+13. TIME-RESTRICTED AGGREGATIONS (The "Last N Games" Pattern):
+    When a user asks for a total or average over a specific number of recent games, you MUST respect SQL order of operations. You cannot aggregate and LIMIT in the same query level.
+    Use this exact architectural pattern with a CASE statement inside a subquery:
+    SELECT SUM(target_stat) FROM (
+        SELECT CASE WHEN home_team LIKE '%[TEAM]%' THEN home_stat ELSE away_stat END AS target_stat
+        FROM match_stats 
+        WHERE (home_team LIKE '%[TEAM]%' OR away_team LIKE '%[TEAM]%')
+        ORDER BY match_date DESC LIMIT [N]
+    )
+
+14. STRICT SCHEMA AND ERROR RECOVERY:
+    - You must ONLY use the exact column names listed in the schema. Do not invent columns (e.g., use `home_team`, never `hoome_team`).
+    - If the `execute_sql_query` tool returns a JSON error with "CRITICAL_FAILURE", you have made a typo. You are FORBIDDEN from guessing the final answer. You must immediately write a new, corrected SQL query and run the tool again.
+15. MISSING DATA AND HONESTY (ANTI-HALLUCINATION):
+    If the user asks about a team, player, or league that is not in the database, the `execute_sql_query` tool will return a JSON with "SUCCESS_BUT_EMPTY". 
+    - You are STRICTLY FORBIDDEN from guessing a number or assuming the answer is 0.
+    - 0 means they played and scored no goals. Empty means we have no record of them playing. Do not confuse the two.
+    - You MUST reply to the user stating clearly: "I apologize, but I don't currently have data for that specific team/player/match in my database."
+16. DRAWING CHARTS: If the user explicitly asks for a chart or graph, follow these steps:
+    - Step 1: Use `execute_sql_query` to get the raw data.
+    - Step 2: Use the `generate_bar_chart` tool, passing the extracted names as `labels` and the numbers as `values`.
+    - Step 3: You MUST output a final conversational text response containing the actual numbers. Never end your turn with just a tool call.
 """
 
 ollama_tools = [
@@ -190,64 +302,74 @@ class OllamaMultiModelSession:
     def send_message_sync(self, text):
         self.messages.append({'role': 'user', 'content': text})
 
-        # STEP 1: Ask the Logic Model (SECOND_OLLAMA_MODEL) if a tool/SQL is needed
-        if PLATFORM != "telegram":
-            print(f"⚙️ [Routing to {self.logic_model} for logic analysis...]")
+        max_retries = 3
+        attempts = 0
 
-        logic_response = self.ollama.chat(
-            model=self.logic_model,
-            messages=self.messages,
-            tools=ollama_tools
-        )
+        while attempts < max_retries:
+            if PLATFORM != "telegram":
+                print(
+                    f"⚙️ [Routing to {self.logic_model} for logic analysis (Attempt {attempts + 1})...]")
 
-        logic_message = logic_response['message']
-        self.messages.append(logic_message)
+            logic_response = self.ollama.chat(
+                model=self.logic_model,
+                messages=self.messages,
+                tools=ollama_tools
+            )
 
-        # Grab official tool calls if the model used the API correctly
-        tool_calls_to_execute = logic_message.get('tool_calls', [])
+            logic_message = logic_response['message']
+            self.messages.append(logic_message)
 
-        # --- JSON FALLBACK PARSER ---
-        # If no official tools were triggered, check if the model just printed raw JSON text
-        if not tool_calls_to_execute and logic_message.get('content'):
-            try:
-                # Try to load the text as JSON
-                parsed_content = json.loads(logic_message['content'].strip())
-                # Check if it looks like our tool format
-                if isinstance(parsed_content, dict) and "name" in parsed_content and "arguments" in parsed_content:
-                    if PLATFORM != "telegram":
-                        print(
-                            "🔧 [Caught raw JSON text and converting it to a tool call...]")
-                    tool_calls_to_execute = [{'function': parsed_content}]
-            except json.JSONDecodeError:
-                pass  # It's just normal text, move on
+            tool_calls_to_execute = logic_message.get('tool_calls', [])
 
-        # If STILL no tools to execute, return the text directly to the user
-        if not tool_calls_to_execute:
-            return self.MockResponse(logic_message['content'])
-
-        # STEP 2: Execute the tools
-        for tool in tool_calls_to_execute:
-            func_name = tool['function']['name']
-            func_args = tool['function']['arguments']
-
-            if func_name in available_functions:
-                function_to_call = available_functions[func_name]
+            # --- JSON FALLBACK PARSER ---
+            if not tool_calls_to_execute and logic_message.get('content'):
                 try:
-                    # Convert string args to dict if the model messed up formatting
-                    if isinstance(func_args, str):
-                        func_args = json.loads(func_args)
-                    function_response = function_to_call(**func_args)
-                except Exception as e:
-                    function_response = f"Error executing tool: {e}"
+                    parsed_content = json.loads(
+                        logic_message['content'].strip())
+                    if isinstance(parsed_content, dict) and "name" in parsed_content and "arguments" in parsed_content:
+                        tool_calls_to_execute = [{'function': parsed_content}]
+                except json.JSONDecodeError:
+                    pass
 
-                # Append the raw database result to the history
-                self.messages.append({
-                    'role': 'tool',
-                    'content': str(function_response),
-                    'name': func_name
-                })
+            if not tool_calls_to_execute:
+                return self.MockResponse(logic_message['content'])
 
-        # STEP 3: Pass the history (now containing the raw SQL data) to the Chat Model (OLLAMA_MODEL)
+            # STEP 2: Execute the tools
+            has_error = False
+            for tool in tool_calls_to_execute:
+                func_name = tool['function']['name']
+                func_args = tool['function']['arguments']
+
+                if func_name in available_functions:
+                    function_to_call = available_functions[func_name]
+                    try:
+                        if isinstance(func_args, str):
+                            func_args = json.loads(func_args)
+                        function_response = function_to_call(**func_args)
+                    except Exception as e:
+                        function_response = f"SQL Error: {e}"
+
+                    self.messages.append({
+                        'role': 'tool',
+                        'content': str(function_response),
+                        'name': func_name
+                    })
+
+                    # Check if the tool returned an error string
+                    if str(function_response).startswith("SQL Error"):
+                        has_error = True
+
+            # If there was an SQL error, loop back and let the Logic Engine try again
+            if has_error:
+                attempts += 1
+                if PLATFORM != "telegram":
+                    print(
+                        "⚠️ [SQL Error detected. Asking Logic Engine to correct it...]")
+                continue  # Go back to the top of the while loop
+            else:
+                break  # Success! Break out of the loop and go to the Chat Model
+
+        # STEP 3: Pass the successful history to the Chat Model
         if PLATFORM != "telegram":
             print(f"🗣️ [Routing to {self.chat_model} to generate response...]")
 
@@ -277,7 +399,8 @@ def create_chat_session():
             model=os.getenv("GOOGLE_MODEL_NAME"),
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
-                tools=[execute_sql_query, manage_memory],
+                tools=[execute_sql_query, manage_memory,
+                       generate_bar_chart],  # <--- Added it here!
                 temperature=0.0,
             )
         )
@@ -306,7 +429,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             response = chat_session.send_message(user_input)
 
-        await update.message.reply_text(response.text)
+        # --- NEW: COMBINED TELEGRAM OUTPUT LOGIC ---
+        if os.path.exists('chart.png'):
+            await context.bot.send_chat_action(chat_id=chat_id, action='upload_photo')
+            with open('chart.png', 'rb') as photo:
+
+                # Telegram captions have a maximum limit of ~1024 characters.
+                # If the AI wrote a short text, bundle them together!
+                if len(response.text) < 1000:
+                    await update.message.reply_photo(photo=photo, caption=response.text)
+                else:
+                    # If the AI wrote a massive essay, send them separately so it doesn't crash
+                    await update.message.reply_photo(photo=photo)
+                    await update.message.reply_text(response.text)
+
+            # Delete the file to save memory
+            os.remove('chart.png')
+        else:
+            # No chart was generated, just send the normal text
+            await update.message.reply_text(response.text)
 
     except Exception as e:
         error_msg = f"⚠️ Oops, I hit an error: {e}"
@@ -347,9 +488,8 @@ def run_terminal_chat():
             else:
                 response = chat.send_message(user_input)
 
-            print(f"\n⚽ Football Consul: {response.text}")
-            print("-" * 50)
-
+            text_output = response.text if response.text else "Here is your chart!"
+            print(f"\n⚽ Football Consul: {text_output}")
         except Exception as e:
             print(f"\n⚠️ Oops, I hit an error: {e}")
 

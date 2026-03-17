@@ -1,5 +1,6 @@
 import sqlite3
 import time
+from datetime import datetime
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
@@ -11,10 +12,13 @@ def setup_database():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # 1. Match Stats Table (Now with formation columns)
+    # 1. Match Stats Table (Now with Date, Competition, and Stage columns)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS match_stats (
             match_id TEXT PRIMARY KEY,
+            match_date TEXT,
+            competition TEXT,
+            match_stage TEXT,
             home_team TEXT, away_team TEXT,
             home_score INTEGER, away_score INTEGER,
             home_formation TEXT, away_formation TEXT,
@@ -67,14 +71,14 @@ def get_existing_match_ids(conn):
     return {row[0] for row in cursor.fetchall()}
 
 
-def parse_and_save_stats(html_content, conn, match_id, home_team, away_team, home_score, away_score):
+def parse_and_save_stats(html_content, conn, match_id, competition, match_stage, home_team, away_team, home_score, away_score):
     """Parses the main Stats tab and saves to match_stats."""
     soup = BeautifulSoup(html_content, 'html.parser')
 
     stats = {
-        'match_id': match_id, 'home_team': home_team, 'away_team': away_team,
+        'match_id': match_id, 'match_date': None, 'competition': competition, 'match_stage': match_stage,
+        'home_team': home_team, 'away_team': away_team,
         'home_score': home_score, 'away_score': away_score,
-        # Will be updated by lineups parser
         'home_formation': None, 'away_formation': None,
         'home_xg': None, 'away_xg': None, 'home_possession': None, 'away_possession': None,
         'home_total_shots': None, 'away_total_shots': None, 'home_shots_on_target': None, 'away_shots_on_target': None,
@@ -85,6 +89,18 @@ def parse_and_save_stats(html_content, conn, match_id, home_team, away_team, hom
         'home_goalkeeper_saves': None, 'away_goalkeeper_saves': None
     }
 
+    # Extract and format the Match Date
+    date_elem = soup.find('div', class_='duelParticipant__startTime')
+    if date_elem:
+        raw_date = date_elem.text.strip()
+        try:
+            # Convert from DD.MM.YYYY HH:MM to YYYY-MM-DD HH:MM
+            parsed_date = datetime.strptime(raw_date, "%d.%m.%Y %H:%M")
+            stats['match_date'] = parsed_date.strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            stats['match_date'] = raw_date
+
+    # Extract Statistics
     rows = soup.find_all('div', attrs={'data-testid': 'wcl-statistics'})
     for row in rows:
         category_elem = row.find(
@@ -142,10 +158,12 @@ def parse_and_save_stats(html_content, conn, match_id, home_team, away_team, hom
             except ValueError:
                 continue
 
+    # Insert into Database
     cursor = conn.cursor()
     cursor.execute('''
         INSERT OR REPLACE INTO match_stats 
-        VALUES (:match_id, :home_team, :away_team, :home_score, :away_score, :home_formation, :away_formation,
+        VALUES (:match_id, :match_date, :competition, :match_stage, :home_team, :away_team, 
+                :home_score, :away_score, :home_formation, :away_formation,
                 :home_xg, :away_xg, :home_possession, :away_possession, :home_total_shots, :away_total_shots, 
                 :home_shots_on_target, :away_shots_on_target, :home_shots_off_target, :away_shots_off_target, 
                 :home_blocked_shots, :away_blocked_shots, :home_corners, :away_corners, :home_offsides, :away_offsides,
@@ -192,21 +210,14 @@ def parse_and_save_lineups(html_content, conn, match_id):
                     'div', class_='lf__participantNew')
 
                 for player in players:
-                    # FIX: Specifically target the span with the name class, not just the testid
                     name_tag = player.find(
                         'span', class_=lambda c: c and 'wcl-name_' in c)
                     if not name_tag:
                         continue
 
-                    name = name_tag.text.strip()
-
-                    # Clean up captain (C) or goalkeeper (G) tags if they accidentally bleed in
-                    name = name.replace("(C)", "").replace("(G)", "").strip()
-
-                    # Create a clean ID for the database
+                    name = name_tag.text.strip().replace("(C)", "").replace("(G)", "").strip()
                     player_id = name.lower().replace(" ", "_").replace(".", "")
 
-                    # FIX: Specifically target the span with the number class
                     num_tag = player.find(
                         'span', class_=lambda c: c and 'wcl-number_' in c)
                     shirt_number = num_tag.text.strip() if num_tag else None
@@ -216,11 +227,8 @@ def parse_and_save_lineups(html_content, conn, match_id):
                     rating = float(rating_tag.text.strip()
                                    ) if rating_tag else None
 
-                    # Insert player dictionary (ignores if they already exist)
                     cursor.execute(
                         'INSERT OR IGNORE INTO players (player_id, name) VALUES (?, ?)', (player_id, name))
-
-                    # Insert match connection
                     cursor.execute('''
                         INSERT INTO match_lineups (match_id, player_id, team_type, shirt_number, is_starter, rating)
                         VALUES (?, ?, ?, ?, ?, ?)
@@ -262,32 +270,43 @@ def scrape_league(league_name, target_url):
 
         main_html = page.content()
         soup = BeautifulSoup(main_html, 'html.parser')
-        match_elements = soup.find_all('div', class_='event__match')
         match_list = []
 
-        for match in match_elements:
-            match_id_raw = match.get('id')
-            if not match_id_raw:
-                continue
-            match_id = match_id_raw.split('_')[-1]
+        # Track the stage of the competition (e.g., Round 1, Quarter-finals)
+        current_stage = "Regular Season"
 
-            try:
-                home_team = match.find('div', class_='event__homeParticipant').find(
-                    'span', class_='wcl-name_jjfMf').text.strip()
-                away_team = match.find('div', class_='event__awayParticipant').find(
-                    'span', class_='wcl-name_jjfMf').text.strip()
-                home_score = match.find(
-                    'span', class_='event__score--home').text.strip()
-                away_score = match.find(
-                    'span', class_='event__score--away').text.strip()
+        # Search for both round headers and matches to keep them in order
+        for element in soup.find_all(['div'], class_=lambda c: c and ('event__round' in c or 'event__match' in c)):
+            classes = element.get('class', [])
 
-                if home_score.isdigit() and away_score.isdigit():
-                    match_list.append({
-                        'id': match_id, 'home': home_team, 'away': away_team,
-                        'h_score': int(home_score), 'a_score': int(away_score)
-                    })
-            except AttributeError:
-                continue
+            if 'event__round' in classes:
+                current_stage = element.text.strip()
+
+            elif 'event__match' in classes:
+                match_id_raw = element.get('id')
+                if not match_id_raw:
+                    continue
+                match_id = match_id_raw.split('_')[-1]
+
+                try:
+                    home_team = element.find('div', class_='event__homeParticipant').find(
+                        'span', class_='wcl-name_jjfMf').text.strip()
+                    away_team = element.find('div', class_='event__awayParticipant').find(
+                        'span', class_='wcl-name_jjfMf').text.strip()
+                    home_score = element.find(
+                        'span', class_='event__score--home').text.strip()
+                    away_score = element.find(
+                        'span', class_='event__score--away').text.strip()
+
+                    if home_score.isdigit() and away_score.isdigit():
+                        match_list.append({
+                            'id': match_id, 'home': home_team, 'away': away_team,
+                            'h_score': int(home_score), 'a_score': int(away_score),
+                            'competition': league_name,
+                            'match_stage': current_stage
+                        })
+                except AttributeError:
+                    continue
 
         print(
             f"\nFound {len(match_list)} finished matches for {league_name}. Beginning deep extraction...\n")
@@ -307,10 +326,12 @@ def scrape_league(league_name, target_url):
                 page.wait_for_selector(
                     'div[data-testid="wcl-statistics"]', timeout=5000)
                 time.sleep(0.5)
-                parse_and_save_stats(
-                    page.content(), conn, m['id'], m['home'], m['away'], m['h_score'], m['a_score'])
 
-                # 2. Extract Lineups (NEW)
+                # Pass the new competition and match_stage variables
+                parse_and_save_stats(page.content(), conn, m['id'], m['competition'], m['match_stage'],
+                                     m['home'], m['away'], m['h_score'], m['a_score'])
+
+                # 2. Extract Lineups
                 lineups_tab = page.locator('a[data-analytics-alias="lineups"]')
                 lineups_tab.click(timeout=5000)
                 page.wait_for_selector('div.lf__lineUp', timeout=5000)
@@ -318,14 +339,14 @@ def scrape_league(league_name, target_url):
                 parse_and_save_lineups(page.content(), conn, m['id'])
 
                 print(
-                    f"✅ Saved Stats & Lineups: {m['home']} {m['h_score']}-{m['a_score']} {m['away']}")
+                    f"✅ Saved Stats & Lineups: {m['home']} {m['h_score']}-{m['a_score']} {m['away']} ({m['match_stage']})")
 
             except Exception as e:
                 print(
                     f"⚠️ Error parsing {m['home']} vs {m['away']}: {e}. Skipping advanced stats.")
                 # We still save the base match if advanced stats fail
-                parse_and_save_stats(
-                    "", conn, m['id'], m['home'], m['away'], m['h_score'], m['a_score'])
+                parse_and_save_stats("", conn, m['id'], m['competition'], m['match_stage'],
+                                     m['home'], m['away'], m['h_score'], m['a_score'])
 
             time.sleep(1)
 
@@ -336,14 +357,18 @@ def scrape_league(league_name, target_url):
 
 if __name__ == "__main__":
     leagues_to_scrape = [
-        {
-            "name": "Premier League",
-            "url": "https://www.flashscore.com/football/england/premier-league/results/"
-        },
-        {
-            "name": "LaLiga",
-            "url": "https://www.flashscore.com/football/spain/laliga/results/"
-        }
+        {"name": "Premier League",
+            "url": "https://www.flashscore.com/football/england/premier-league/results/"},
+        {"name": "LaLiga", "url": "https://www.flashscore.com/football/spain/laliga/results/"},
+        # Fixed typo in Serie A
+        {"name": "Serie A",
+            "url": "https://www.flashscore.com/football/italy/serie-a/results/"},
+        {"name": "Bundesliga",
+            "url": "https://www.flashscore.com/football/germany/bundesliga/results/"},
+        {"name": "Champions League",
+            "url": "https://www.flashscore.com/football/europe/champions-league/results/"},
+        {"name": "Europa League",
+            "url": "https://www.flashscore.com/football/europe/europa-league/results/"},
     ]
 
     for league in leagues_to_scrape:

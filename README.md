@@ -1,23 +1,20 @@
 # Football Consul
 
-Football Consul is an AI-powered Telegram bot and web scraper designed to analyze football statistics.
+Football Consul is an AI-powered Telegram bot and analytics engine designed to analyze football statistics.
 
-It uses Playwright and BeautifulSoup to extract match stats and lineups into a local SQLite database. It features an AI agent that translates natural language user questions into SQL queries, supporting both cloud-based (Google Gemini) and local (Ollama) Large Language Models.
+It uses Playwright and BeautifulSoup to extract match stats and lineups into a local SQLite database. It features an AI agent that translates natural language into complex SQL queries, supporting both Google Gemini and local Ollama models.
 
 ---
 
-## Features
+## 🚀 Key Features
 
-- Automated Data Extraction  
-  Scrapes match stats, xG, possession, and lineups using `playwright` and `bs4`.
-
-- Normalized SQLite Database  
-  Stores matches, teams, players, and match lineups.
-
-- Text-to-SQL AI Agent  
-  Uses Google's Gemini to parse user questions, query the local database, and return conversational, mathematically accurate insights. Now supports both **Telegram** and **Terminal** interfaces.
-
-- **Multi-Model Local Support (Experimental):** Run entirely locally using Ollama with a dual-model pipeline (one model for conversation, one strict logic model for SQL generation).
+- **📊 Dynamic Data Visualization:** Automatically generates bar charts using `matplotlib` to visualize trends (e.g., shots over the last 5 games).
+- **🛡️ Anti-Hallucination Engine:** The bot is strictly forbidden from guessing. If data is missing or a query is invalid, it uses a self-correction loop or honestly informs the user that data is unavailable.
+- **🧠 Advanced SQL Logic & Memory:** Handles complex "Last N Games" queries and player-specific joins. It saves baseline stats to memory to answer follow-up questions accurately.
+- **📱 Unified Telegram Output:** Delivers charts and text breakdowns as a single, combined message (Photo + Caption) for a cleaner experience.
+- **🪟 Terminal Auto-Open:** Charts automatically pop open in your default Windows photo viewer when running in Terminal mode.
+- **🕷️ Automated Data Extraction:** Scrapes match stats, xG, possession, and lineups using `playwright` and `bs4`.
+- **🗄️ Normalized SQLite Database:** Stores matches, teams, players, and match lineups efficiently.
 
 ---
 

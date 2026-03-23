@@ -701,7 +701,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove('chart.png')
         else:
             # No chart was generated, just send the normal text
-            await update.message.reply_text(response.tex, parse_mode='HTML')
+            await update.message.reply_text(response.text, parse_mode='HTML')
 
         # --- 4. LOG THE SUCCESSFUL CONVERSATION ---
         # This saves the user's question and the AI's final answer to the database

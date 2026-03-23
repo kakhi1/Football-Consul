@@ -1,0 +1,1 @@
+[ENTERPRISE PROMPT HIDDEN FOR SECURITY: This file contains the 16-rule proprietary prompt that handles dynamic SQL generation, table joins, data normalization, and Telegram UI formatting. To run locally, create a 'system_prompt.txt' file with your own instructions.]

@@ -18,5 +18,6 @@ chat_old.py
 check_everton.py
 clean_database.py
 migrate.py
+system_prompt.txt
 # Playwright
 .playwright/

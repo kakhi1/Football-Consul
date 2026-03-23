@@ -1,3 +1,5 @@
+import numpy as np
+import seaborn as sns
 import matplotlib.pyplot as plt
 import sqlite3
 import os
@@ -16,7 +18,7 @@ import psycopg2
 import os
 from telegram import Update, LabeledPrice, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, PreCheckoutQueryHandler, CallbackQueryHandler, filters, ContextTypes
-
+import textwrap
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from telegram import Update, LabeledPrice
@@ -38,11 +40,15 @@ if AI_MODEL != "ollama":
     from google.genai import types
     google_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
+
 if PLATFORM == "telegram":
     logging.basicConfig(
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        level=logging.INFO
+        level=logging.WARNING
     )
+    # Silence the constant background polling spam
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("telegram").setLevel(logging.WARNING)
 
 # 2. Tools & Memory
 agent_memory = {}
@@ -240,7 +246,9 @@ def log_conversation(chat_id: int, user_message: str, ai_response: str):
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"⚠️ Could not log conversation: {e}")
+        # <-- Wrap this print as well
+        if PLATFORM != "telegram":
+            print(f"⚠️ Could not log conversation: {e}")
 
 
 async def leagues_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -259,28 +267,55 @@ async def leagues_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def generate_bar_chart(labels: list[str], values: list[float], title: str, ylabel: str) -> str:
-    """Generates a bar chart, saves it as 'chart.png', and clears memory."""
-    if PLATFORM != "telegram":
-        print(f"📊 [Drawing Chart]: {title}")
+    """Generates a premium dark-mode bar chart with dynamic contrast colors."""
+    if os.getenv("PLATFORM", "terminal").lower() != "telegram":
+        print(f"📊 [Drawing Premium Chart]: {title}")
 
     try:
-        plt.figure(figsize=(8, 5))
-        plt.bar(labels, values, color='#1DA1F2')
-        plt.title(title)
-        plt.ylabel(ylabel)
-        plt.xticks(rotation=45, ha='right')
+        # 1. Set Premium Dark Theme
+        sns.set_theme(style="darkgrid", rc={
+            "axes.facecolor": "#1A1A1A",
+            "figure.facecolor": "#121212",
+            "text.color": "white",
+            "axes.labelcolor": "white",
+            "xtick.color": "white",
+            "ytick.color": "white",
+            "grid.color": "#333333"
+        })
+
+        plt.figure(figsize=(9, 6))
+
+        # 2. Draw the Chart using a built-in high-contrast palette
+        # "Set2" automatically assigns beautiful, distinct colors to each bar
+        ax = sns.barplot(x=labels, y=values, hue=labels,
+                         palette="Set2", dodge=False)
+
+        # 3. Add Exact Data Labels
+        for container in ax.containers:
+            ax.bar_label(container, fmt='%.2f', padding=5,
+                         color='white', weight='bold', fontsize=12)
+
+        # 4. Clean up the aesthetics
+        plt.title(title, fontsize=16, weight='bold', pad=15)
+        plt.ylabel(ylabel, fontsize=12, weight='bold')
+        plt.xticks(rotation=0, fontsize=12, weight='bold')
+
+        # Hide the legend since the x-axis already has the names
+        if ax.legend_:
+            ax.legend_.remove()
+
         plt.tight_layout()
+        plt.savefig('chart.png', dpi=300)
 
-        plt.savefig('chart.png')
-
-        # --- NEW: AUTO-OPEN CHART IN TERMINAL MODE ---
-        if PLATFORM == "terminal":
+        # --- AUTO-OPEN CHART IN TERMINAL MODE ---
+        platform_mode = os.getenv("PLATFORM", "terminal").lower()
+        if platform_mode == "terminal":
             try:
                 if platform.system() == 'Windows':
                     os.startfile('chart.png')
-                elif platform.system() == 'Darwin':  # macOS
+                elif platform.system() == 'Darwin':
                     subprocess.call(('open', 'chart.png'))
-                else:  # Linux
+                else:
                     subprocess.call(('xdg-open', 'chart.png'))
             except Exception as e:
                 print(f"⚠️ Could not open image automatically: {e}")
@@ -289,6 +324,81 @@ def generate_bar_chart(labels: list[str], values: list[float], title: str, ylabe
         return "SUCCESS: Chart saved as chart.png. Tell the user you have drawn the chart and provide the text breakdown."
     except Exception as e:
         return f"ERROR: Could not generate chart. {e}"
+
+
+def generate_radar_chart(categories: list[str], player_data: dict, title: str) -> str:
+    if os.getenv("PLATFORM", "terminal").lower() != "telegram":
+        print(f"🕸️ [Drawing Radar Chart]: {title}")
+
+    try:
+        num_vars = len(categories)
+        angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
+        angles += angles[:1]
+
+        # --- NEW LOGIC: Normalize the data so Pass % doesn't squash xG ---
+        # Find the maximum value for each category across all players
+        max_values = []
+        for i in range(num_vars):
+            category_max = max(player_vals[i]
+                               for player_vals in player_data.values())
+            # Add a 15% buffer so the highest value doesn't touch the absolute edge of the graph
+            max_values.append(category_max * 1.15 if category_max > 0 else 1.0)
+
+        plt.style.use('dark_background')
+        fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
+        fig.patch.set_facecolor('#121212')
+        ax.set_facecolor('#1A1A1A')
+
+        ax.set_theta_offset(np.pi / 2)
+        ax.set_theta_direction(-1)
+
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(categories, color='white', size=12, weight='bold')
+
+        # Hide the raw Y-axis numbers because we are scaling the data
+        ax.set_yticklabels([])
+        ax.grid(color='#333333', linestyle='--', linewidth=1)
+        ax.spines['polar'].set_color('#555555')
+
+        colors = ['#00E5FF', '#FF007F', '#FFEA00']
+
+        for idx, (player_name, values) in enumerate(player_data.items()):
+            # --- NEW LOGIC: Apply the scale to each value ---
+            normalized_vals = [v / m for v, m in zip(values, max_values)]
+            values_closed = normalized_vals + normalized_vals[:1]
+
+            color = colors[idx % len(colors)]
+            ax.plot(angles, values_closed, color=color,
+                    linewidth=2, label=player_name)
+            ax.fill(angles, values_closed, color=color, alpha=0.25)
+
+# 5. Add Legend and Title
+        # Wrap the title so it doesn't get cut off the edges!
+        wrapped_title = "\n".join(textwrap.wrap(title, width=45))
+        plt.title(wrapped_title, size=18, color='white', weight='bold', y=1.1)
+
+        plt.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1),
+                   facecolor='#1A1A1A', edgecolor='#333333', labelcolor='white')
+
+        plt.tight_layout()
+        plt.savefig('chart.png', dpi=300)
+
+        platform_mode = os.getenv("PLATFORM", "terminal").lower()
+        if platform_mode == "terminal":
+            try:
+                if platform.system() == 'Windows':
+                    os.startfile('chart.png')
+                elif platform.system() == 'Darwin':
+                    subprocess.call(('open', 'chart.png'))
+                else:
+                    subprocess.call(('xdg-open', 'chart.png'))
+            except Exception as e:
+                print(f"⚠️ Could not open image automatically: {e}")
+
+        plt.close()
+        return "SUCCESS: Radar chart saved as chart.png. Tell the user you have drawn the chart and provide a conversational breakdown."
+    except Exception as e:
+        return f"ERROR: Could not generate radar chart. {e}"
 
 
 def manage_memory(action: str, data: dict) -> str:
@@ -363,114 +473,17 @@ available_functions = {
     'execute_sql_query': execute_sql_query,
     'manage_memory': manage_memory,
     'generate_bar_chart': generate_bar_chart,
+    'generate_radar_chart': generate_radar_chart,  # <-- Add this line!
 }
 
-# 3. System Instructions & Schemas
-system_instruction = """
-You are 'Football Consul', an expert AI football data analyst.
-You have access to a tool called `execute_sql_query`. Use it to query the PostgreSQL database to answer user questions.
+# Load the AI's brain from the hidden text file
+try:
+    with open("system_prompt.txt", "r", encoding="utf-8") as file:
+        system_instruction = file.read()
+except FileNotFoundError:
+    print("⚠️ ERROR: system_prompt.txt not found! Please create it.")
+    exit(1)
 
-DATABASE SCHEMA:
-
-Table: `match_stats`
-Columns: 
-- match_id (TEXT)
-- match_date (TEXT, Format: YYYY-MM-DD HH:MM)
-- competition (TEXT, e.g., 'LaLiga', 'Champions League', 'Premier League')
-- match_stage (TEXT, e.g., 'Regular Season', 'Quarter-finals', 'Group Stage')
-- home_team (TEXT)
-- away_team (TEXT)
-- home_score (INTEGER)
-- away_score (INTEGER)
-- home_formation (TEXT)
-- away_formation (TEXT)
-- home_xg (REAL)
-- away_xg (REAL)
-- home_possession_pct (INTEGER)
-- away_possession_pct (INTEGER)
-- home_total_shots (INTEGER)
-- away_total_shots (INTEGER)
-- home_shots_on_target (INTEGER)
-- away_shots_on_target (INTEGER)
-- home_corners (INTEGER)
-- away_corners (INTEGER)
-- home_fouls (INTEGER)
-- away_fouls (INTEGER)
-- home_offsides (INTEGER)
-- away_offsides (INTEGER)
-- home_blocked_shots (INTEGER)
-- away_blocked_shots (INTEGER)
-- home_yellow_cards (INTEGER)
-- away_yellow_cards (INTEGER)
-- home_big_chances (INTEGER)
-- away_big_chances (INTEGER)
-- home_passes_pct (INTEGER)
-- away_passes_pct (INTEGER)
-- home_goalkeeper_saves (INTEGER)
-- away_goalkeeper_saves (INTEGER)
-
-Table: `players`
-Columns: 
-- player_id (TEXT)
-- name (TEXT)
-
-Table: `match_lineups`
-Columns: 
-- lineup_id (INTEGER)
-- match_id (TEXT, Foreign Key to match_stats)
-- player_id (TEXT, Foreign Key to players)
-- team_type (TEXT, 'Home' or 'Away')
-- shirt_number (TEXT)
-- is_starter (BOOLEAN)
-- rating (REAL)
-
-CRITICAL RULES:
-1. Always use the `LIKE` operator with wildcards for team names (e.g., `WHERE home_team LIKE '%Villa%'`).
-2. Teams play both HOME and AWAY. If calculating a total or average for a team across all matches, you MUST combine their home and away stats using UNION ALL.
-3. If the user specifies "when they are home", only query the home columns.
-4. "Spurs" = "Tottenham", "United" = "Manchester Utd".
-5. Run the query, get the exact mathematical result, and explain it conversationally. Do not expose the raw SQL to the user in your final answer.
-6. Unified Team Perspective: A team's data is split across home and away columns. Whenever calculating a team's stats, you MUST standardize the perspective using a UNION ALL subquery. 
-   - When the target team is the 'home_team', alias them as 'target_team', their opponent as 'opponent_team', their stats as 'team_stat' vs 'opponent_stat', AND add a column `'Home' AS venue`.
-   - Do the exact reverse when the target team is the 'away_team' AND add a column `'Away' AS venue`.
-7. Head-to-Head vs Overall Average: If a user asks against which teams a club performed "better/worse than their average", you MUST follow these exact steps:
-   - Step 1: Calculate their overall season average using a CTE.
-   - Step 2: Build the Unified Team Perspective subquery (from Rule 6), ensuring the 'venue' column is included.
-   - Step 3: GROUP BY opponent_team AND venue on that unified subquery.
-   - Step 4: Use a HAVING clause to compare the venue-specific head-to-head average against the overall average CTE.
-8. MEMORY USAGE (CRITICAL EXECUTION ORDER):
-   You have access to a `manage_memory` tool. You must follow this exact sequence:
-   - STEP 1 (Calculate): When asked for a baseline stat or average, use `execute_sql_query`.
-   - STEP 2 (Save): BEFORE replying to the user, you MUST immediately use `manage_memory` with action='save' to store the exact numerical result (e.g., key: 'everton_avg_corners', value: '5.43'). Do not skip this step.
-   - STEP 3 (Reply): Present the answer to the user.
-   - STEP 4 (Recall): If the user asks a follow-up question requiring past stats, use `manage_memory` with action='read' to retrieve the exact value BEFORE writing your next SQL query.
-9. UNDERSTANDING FIRST: When using the `execute_sql_query` tool, you MUST fill out the `agent_understanding` parameter. Briefly explain who the subject is and exactly which columns you are targeting before writing the SQL.
-10. TEMPORAL DATA: Use the `match_date` column for questions about a team's 'last match' or 'recent games'. Example: `ORDER BY match_date DESC LIMIT 5`.
-11. COMPETITIONS & STAGES: Use `competition` and `match_stage` to filter for specific tournaments or knockout rounds (e.g., `WHERE competition = 'Champions League' AND match_stage != 'Group Stage'`).
-12. ERROR HANDLING: If your tool returns a string starting with "SQL Error", you made a syntax mistake. Do not tell the user there is an error; immediately execute a new, corrected SQL query.
-13. TIME-RESTRICTED AGGREGATIONS (The "Last N Games" Pattern):
-    When a user asks for a total or average over a specific number of recent games, you MUST respect SQL order of operations. You cannot aggregate and LIMIT in the same query level.
-    Use this exact architectural pattern with a CASE statement inside a subquery:
-    SELECT SUM(target_stat) FROM (
-        SELECT CASE WHEN home_team LIKE '%[TEAM]%' THEN home_stat ELSE away_stat END AS target_stat
-        FROM match_stats 
-        WHERE (home_team LIKE '%[TEAM]%' OR away_team LIKE '%[TEAM]%')
-        ORDER BY match_date DESC LIMIT [N]
-    )
-
-14. STRICT SCHEMA AND ERROR RECOVERY:
-    - You must ONLY use the exact column names listed in the schema. Do not invent columns (e.g., use `home_team`, never `hoome_team`).
-    - If the `execute_sql_query` tool returns a JSON error with "CRITICAL_FAILURE", you have made a typo. You are FORBIDDEN from guessing the final answer. You must immediately write a new, corrected SQL query and run the tool again.
-15. MISSING DATA AND HONESTY (ANTI-HALLUCINATION):
-    If the user asks about a team, player, or league that is not in the database, the `execute_sql_query` tool will return a JSON with "SUCCESS_BUT_EMPTY". 
-    - You are STRICTLY FORBIDDEN from guessing a number or assuming the answer is 0.
-    - 0 means they played and scored no goals. Empty means we have no record of them playing. Do not confuse the two.
-    - You MUST reply to the user stating clearly: "I apologize, but I don't currently have data for that specific team/player/match in my database."
-16. DRAWING CHARTS: If the user explicitly asks for a chart or graph, follow these steps:
-    - Step 1: Use `execute_sql_query` to get the raw data.
-    - Step 2: Use the `generate_bar_chart` tool, passing the extracted names as `labels` and the numbers as `values`.
-    - Step 3: You MUST output a final conversational text response containing the actual numbers. Never end your turn with just a tool call.
-"""
 
 ollama_tools = [
     {
@@ -579,7 +592,9 @@ class OllamaMultiModelSession:
                     })
 
                     # Check if the tool returned an error string
-                    if str(function_response).startswith("SQL Error"):
+
+                    response_str = str(function_response)
+                    if response_str.startswith("SQL Error") or "CRITICAL_FAILURE" in response_str:
                         has_error = True
 
             # If there was an SQL error, loop back and let the Logic Engine try again
@@ -618,15 +633,15 @@ def create_chat_session():
         if PLATFORM != "telegram":
             print("☁️ Using Google Gemini")
         # Use the global client here!
-        return google_client.chats.create(
-            model=os.getenv("GOOGLE_MODEL_NAME"),
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                tools=[execute_sql_query, manage_memory,
-                       generate_bar_chart],  # <--- Added it here!
-                temperature=0.0,
-            )
+    return google_client.chats.create(
+        model=os.getenv("GOOGLE_MODEL_NAME"),
+        config=types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            tools=[execute_sql_query, manage_memory,
+                   generate_bar_chart, generate_radar_chart],  # <--- Added it here!
+            temperature=0.0,
         )
+    )
 
 
 # --- 5. TELEGRAM LOGIC ---
@@ -677,16 +692,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 # Telegram captions have a maximum limit of ~1024 characters.
                 if len(response.text) < 1000:
-                    await update.message.reply_photo(photo=photo, caption=response.text)
+                    await update.message.reply_photo(photo=photo, caption=response.text, parse_mode='HTML')
                 else:
                     await update.message.reply_photo(photo=photo)
-                    await update.message.reply_text(response.text)
+                    await update.message.reply_text(response.text, parse_mode='HTML')
 
             # Delete the file to save memory
             os.remove('chart.png')
         else:
             # No chart was generated, just send the normal text
-            await update.message.reply_text(response.text)
+            await update.message.reply_text(response.tex, parse_mode='HTML')
 
         # --- 4. LOG THE SUCCESSFUL CONVERSATION ---
         # This saves the user's question and the AI's final answer to the database
@@ -694,11 +709,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         error_msg = f"⚠️ Oops, I hit an error: {e}"
-        print(error_msg)
+
+        # <-- Wrap the print statement so it only shows in Terminal mode
+        if PLATFORM != "telegram":
+            print(f"\n{error_msg}")
+
         await update.message.reply_text(error_msg)
 
         # --- 5. LOG THE ERROR ---
-        # This saves the error to the database so you can debug what the user asked that broke it
         log_conversation(chat_id, user_input, error_msg)
 
 

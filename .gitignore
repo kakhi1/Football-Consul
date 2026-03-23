@@ -17,5 +17,6 @@ football_consul.db
 chat_old.py
 check_everton.py
 clean_database.py
+migrate.py
 # Playwright
 .playwright/

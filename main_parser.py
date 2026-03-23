@@ -1,18 +1,20 @@
-import sqlite3
 import time
 from datetime import datetime
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
+import psycopg2
+import os
+from dotenv import load_dotenv
 
-DB_PATH = 'football_consul.db'
+load_dotenv()
+DB_URL = os.getenv("DATABASE_URL")
 
 
 def setup_database():
-    """Initializes the normalized database schema."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = psycopg2.connect(DB_URL)
     cursor = conn.cursor()
 
-    # 1. Match Stats Table (Now with Date, Competition, and Stage columns)
+    # 1. Match Stats Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS match_stats (
             match_id TEXT PRIMARY KEY,
@@ -49,7 +51,7 @@ def setup_database():
     # 3. Match Lineups (The Bridge Table)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS match_lineups (
-            lineup_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lineup_id SERIAL PRIMARY KEY,
             match_id TEXT,
             player_id TEXT,
             team_type TEXT, 
@@ -57,7 +59,8 @@ def setup_database():
             is_starter BOOLEAN,
             rating REAL,
             FOREIGN KEY(match_id) REFERENCES match_stats(match_id),
-            FOREIGN KEY(player_id) REFERENCES players(player_id)
+            FOREIGN KEY(player_id) REFERENCES players(player_id),
+            UNIQUE(match_id, player_id)
         )
     ''')
 
@@ -94,7 +97,6 @@ def parse_and_save_stats(html_content, conn, match_id, competition, match_stage,
     if date_elem:
         raw_date = date_elem.text.strip()
         try:
-            # Convert from DD.MM.YYYY HH:MM to YYYY-MM-DD HH:MM
             parsed_date = datetime.strptime(raw_date, "%d.%m.%Y %H:%M")
             stats['match_date'] = parsed_date.strftime("%Y-%m-%d %H:%M")
         except ValueError:
@@ -158,17 +160,20 @@ def parse_and_save_stats(html_content, conn, match_id, competition, match_stage,
             except ValueError:
                 continue
 
-    # Insert into Database
+    # Insert into Database using Postgres placeholders
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT OR REPLACE INTO match_stats 
-        VALUES (:match_id, :match_date, :competition, :match_stage, :home_team, :away_team, 
-                :home_score, :away_score, :home_formation, :away_formation,
-                :home_xg, :away_xg, :home_possession, :away_possession, :home_total_shots, :away_total_shots, 
-                :home_shots_on_target, :away_shots_on_target, :home_shots_off_target, :away_shots_off_target, 
-                :home_blocked_shots, :away_blocked_shots, :home_corners, :away_corners, :home_offsides, :away_offsides,
-                :home_fouls, :away_fouls, :home_yellow_cards, :away_yellow_cards, :home_big_chances, :away_big_chances, 
-                :home_passes_pct, :away_passes_pct, :home_goalkeeper_saves, :away_goalkeeper_saves)
+        INSERT INTO match_stats 
+        VALUES (%(match_id)s, %(match_date)s, %(competition)s, %(match_stage)s, %(home_team)s, %(away_team)s, 
+                %(home_score)s, %(away_score)s, %(home_formation)s, %(away_formation)s,
+                %(home_xg)s, %(away_xg)s, %(home_possession)s, %(away_possession)s, %(home_total_shots)s, %(away_total_shots)s, 
+                %(home_shots_on_target)s, %(away_shots_on_target)s, %(home_shots_off_target)s, %(away_shots_off_target)s, 
+                %(home_blocked_shots)s, %(away_blocked_shots)s, %(home_corners)s, %(away_corners)s, %(home_offsides)s, %(away_offsides)s,
+                %(home_fouls)s, %(away_fouls)s, %(home_yellow_cards)s, %(away_yellow_cards)s, %(home_big_chances)s, %(away_big_chances)s, 
+                %(home_passes_pct)s, %(away_passes_pct)s, %(home_goalkeeper_saves)s, %(away_goalkeeper_saves)s)
+        ON CONFLICT (match_id) DO UPDATE SET
+            home_score = EXCLUDED.home_score,
+            away_score = EXCLUDED.away_score
     ''', stats)
     conn.commit()
 
@@ -178,13 +183,13 @@ def parse_and_save_lineups(html_content, conn, match_id):
     soup = BeautifulSoup(html_content, 'html.parser')
     cursor = conn.cursor()
 
-    # 1. Update the Formations in match_stats
+    # 1. Update the Formations in match_stats (Using %s)
     formation_spans = soup.find_all(
         'span', {'data-testid': 'wcl-scores-overline-02'})
     if len(formation_spans) >= 3:
         home_formation = formation_spans[0].text.strip()
         away_formation = formation_spans[2].text.strip()
-        cursor.execute('UPDATE match_stats SET home_formation = ?, away_formation = ? WHERE match_id = ?',
+        cursor.execute('UPDATE match_stats SET home_formation = %s, away_formation = %s WHERE match_id = %s',
                        (home_formation, away_formation, match_id))
 
     # 2. Extract Players
@@ -227,11 +232,14 @@ def parse_and_save_lineups(html_content, conn, match_id):
                     rating = float(rating_tag.text.strip()
                                    ) if rating_tag else None
 
+                    # Postgres requires ON CONFLICT DO NOTHING instead of INSERT OR IGNORE
                     cursor.execute(
-                        'INSERT OR IGNORE INTO players (player_id, name) VALUES (?, ?)', (player_id, name))
+                        'INSERT INTO players (player_id, name) VALUES (%s, %s) ON CONFLICT (player_id) DO NOTHING', (player_id, name))
+
                     cursor.execute('''
                         INSERT INTO match_lineups (match_id, player_id, team_type, shirt_number, is_starter, rating)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (match_id, player_id) DO NOTHING
                     ''', (match_id, player_id, team_type, shirt_number, is_starter, rating))
 
     conn.commit()
@@ -272,10 +280,8 @@ def scrape_league(league_name, target_url):
         soup = BeautifulSoup(main_html, 'html.parser')
         match_list = []
 
-        # Track the stage of the competition (e.g., Round 1, Quarter-finals)
         current_stage = "Regular Season"
 
-        # Search for both round headers and matches to keep them in order
         for element in soup.find_all(['div'], class_=lambda c: c and ('event__round' in c or 'event__match' in c)):
             classes = element.get('class', [])
 
@@ -318,7 +324,6 @@ def scrape_league(league_name, target_url):
                 continue
 
             try:
-                # 1. Extract Stats
                 page.goto(f"https://www.flashscore.com/match/{m['id']}/")
                 stats_tab = page.locator(
                     'a[data-analytics-alias="match-statistics"]')
@@ -327,11 +332,9 @@ def scrape_league(league_name, target_url):
                     'div[data-testid="wcl-statistics"]', timeout=5000)
                 time.sleep(0.5)
 
-                # Pass the new competition and match_stage variables
                 parse_and_save_stats(page.content(), conn, m['id'], m['competition'], m['match_stage'],
                                      m['home'], m['away'], m['h_score'], m['a_score'])
 
-                # 2. Extract Lineups
                 lineups_tab = page.locator('a[data-analytics-alias="lineups"]')
                 lineups_tab.click(timeout=5000)
                 page.wait_for_selector('div.lf__lineUp', timeout=5000)
@@ -344,7 +347,6 @@ def scrape_league(league_name, target_url):
             except Exception as e:
                 print(
                     f"⚠️ Error parsing {m['home']} vs {m['away']}: {e}. Skipping advanced stats.")
-                # We still save the base match if advanced stats fail
                 parse_and_save_stats("", conn, m['id'], m['competition'], m['match_stage'],
                                      m['home'], m['away'], m['h_score'], m['a_score'])
 
@@ -360,7 +362,6 @@ if __name__ == "__main__":
         {"name": "Premier League",
             "url": "https://www.flashscore.com/football/england/premier-league/results/"},
         {"name": "LaLiga", "url": "https://www.flashscore.com/football/spain/laliga/results/"},
-        # Fixed typo in Serie A
         {"name": "Serie A",
             "url": "https://www.flashscore.com/football/italy/serie-a/results/"},
         {"name": "Bundesliga",

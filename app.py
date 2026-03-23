@@ -8,6 +8,19 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 import platform
 import subprocess
+import matplotlib.pyplot as plt
+import sqlite3
+import os
+import matplotlib.pyplot as plt
+import psycopg2
+import os
+from telegram import Update, LabeledPrice, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, PreCheckoutQueryHandler, CallbackQueryHandler, filters, ContextTypes
+
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from telegram import Update, LabeledPrice
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, PreCheckoutQueryHandler, filters, ContextTypes
 # 1. Setup & Environment
 load_dotenv()
 PLATFORM = os.getenv("PLATFORM", "terminal").lower()
@@ -33,6 +46,216 @@ if PLATFORM == "telegram":
 
 # 2. Tools & Memory
 agent_memory = {}
+
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    welcome_text = (
+        "⚽ *Welcome to Football Consul!*\n\n"
+        "I am your AI data analyst. Send me a message to mine deep football stats, "
+        "head-to-head records, and generate custom charts.\n\n"
+        "You have *5 free analyses* to start. What should we look at?"
+    )
+
+    # 1. Create the buttons
+    keyboard = [
+        [
+            InlineKeyboardButton("🏆 Supported Leagues",
+                                 callback_data='show_leagues'),
+            InlineKeyboardButton(
+                "💰 Check Balance", callback_data='check_balance')
+        ],
+        [
+            InlineKeyboardButton(
+                "💡 Give me an example question", callback_data='example_question')
+        ]
+    ]
+
+    # 2. Package them into a markup object
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # 3. Send the message with the buttons attached
+    await update.message.reply_text(welcome_text, parse_mode='Markdown', reply_markup=reply_markup)
+
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles all button clicks from inline keyboards."""
+    query = update.callback_query
+    chat_id = query.message.chat_id
+
+    await query.answer()
+
+    if query.data == 'show_leagues':
+        leagues_text = (
+            "🏆 *Currently Supported Leagues:*\n\n"
+            "🇬🇧 Premier League\n🇪🇸 La Liga\n🇮🇹 Serie A\n"
+            "🇩🇪 Bundesliga\n🇪🇺 Champions League\n🇪🇺 Europa League"
+        )
+        await query.message.reply_text(leagues_text, parse_mode='Markdown')
+
+    elif query.data == 'check_balance':
+        balance = get_query_balance(chat_id)
+
+        # Add the Top-Up button here as well!
+        keyboard = [[InlineKeyboardButton(
+            "💳 Buy 200 Pro Analyses ($5.00)", callback_data='buy_more')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.message.reply_text(
+            f"💳 You currently have *{balance} Pro Analyses* remaining.",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+
+    elif query.data == 'example_question':
+        example_text = (
+            "Here are a few things you can ask me! Just copy and paste one:\n\n"
+            "👉 `Show me a bar chart of the average corners for Arsenal over their last 5 games.`\n"
+            "👉 `Which team in La Liga has the highest average possession at home?`\n"
+            "👉 `When Real Madrid plays away, which teams have an xG higher than 1.5 against them?`"
+        )
+        await query.message.reply_text(example_text, parse_mode='Markdown')
+
+    # --- NEW: TRIGGER THE INVOICE FROM THE BUTTON ---
+    elif query.data == 'buy_more':
+        # We just call the invoice function we already wrote!
+        await send_premium_invoice(chat_id, context)
+
+
+def get_query_balance(chat_id: int) -> int:
+    """Fetches the user's current query balance. Creates the user with 5 free queries if new."""
+    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+    cursor.execute(
+        "SELECT query_balance FROM users WHERE chat_id = %s", (chat_id,))
+    user = cursor.fetchone()
+
+    if not user:
+        # Give them 5 free queries to start
+        cursor.execute(
+            "INSERT INTO users (chat_id, query_balance) VALUES (%s, 5) RETURNING query_balance",
+            (chat_id,)
+        )
+        user = cursor.fetchone()
+        conn.commit()
+
+    conn.close()
+    return user['query_balance']
+
+
+def spend_one_query(chat_id: int):
+    """Subtracts 1 from the user's balance."""
+    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET query_balance = query_balance - 1 WHERE chat_id = %s", (chat_id,))
+    conn.commit()
+    conn.close()
+
+
+def add_purchased_queries(chat_id: int, amount: int = 50):
+    """Adds purchased credits to the balance."""
+    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE users 
+        SET query_balance = query_balance + %s, 
+            total_purchased = total_purchased + %s 
+        WHERE chat_id = %s
+    ''', (amount, amount, chat_id))
+    conn.commit()
+    conn.close()
+
+
+async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows the user's balance and provides a top-up button."""
+    chat_id = update.message.chat_id
+    balance = get_query_balance(chat_id)
+
+    # Create the Top-Up button
+    keyboard = [[InlineKeyboardButton(
+        "💳 Buy 200 Pro Analyses ($5.00)", callback_data='buy_more')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        f"💳 You currently have *{balance} Pro Analyses* remaining.",
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
+
+async def send_premium_invoice(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+    """Sends the paywall invoice to the user."""
+    title = "⚽ 200 Pro Analyses"
+    description = "Get 200 AI searches for Premier League, La Liga, Serie A, Bundesliga, UCL, and UEL stats."
+    payload = "200_analyses_pack"
+    currency = "USD"
+
+    # Updated to 200 Analyses
+    prices = [LabeledPrice("200 Pro Analyses", 500)]
+
+    provider_token = os.getenv("PAYMENT_PROVIDER_TOKEN")
+
+    await context.bot.send_invoice(
+        chat_id=chat_id,
+        title=title,
+        description=description,
+        payload=payload,
+        provider_token=provider_token,
+        currency=currency,
+        prices=prices
+    )
+
+
+async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Answers the PreCheckoutQuery to confirm the bot is ready to charge."""
+    query = update.pre_checkout_query
+    if query.invoice_payload != "50_query_refill_pack":
+        await query.answer(ok=False, error_message="Something went wrong with the payload.")
+    else:
+        await query.answer(ok=True)
+
+
+async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the successful payment and updates the database."""
+    chat_id = update.message.chat_id
+
+    # Add 50 new queries to their balance in PostgreSQL!
+    add_purchased_queries(chat_id, 50)
+
+    await update.message.reply_text(
+        "🎉 Payment successful! 50 new queries have been added to your account. What stats should we look at next?"
+    )
+
+
+def log_conversation(chat_id: int, user_message: str, ai_response: str):
+    """Saves the chat history to the database for future analysis."""
+    try:
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO chat_logs (chat_id, user_message, ai_response) 
+            VALUES (%s, %s, %s)
+        ''', (chat_id, user_message, ai_response))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"⚠️ Could not log conversation: {e}")
+
+
+async def leagues_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows the user which leagues are currently supported."""
+    leagues_text = (
+        "🏆 *Currently Supported Leagues:*\n\n"
+        "🇬🇧 Premier League\n"
+        "🇪🇸 La Liga\n"
+        "🇮🇹 Serie A\n"
+        "🇩🇪 Bundesliga\n"
+        "🇪🇺 Champions League\n"
+        "🇪🇺 Europa League\n\n"
+        "I can analyze stats, head-to-head records, and recent form for teams in these competitions! What would you like to know?"
+    )
+    await update.message.reply_text(leagues_text, parse_mode='Markdown')
 
 
 def generate_bar_chart(labels: list[str], values: list[float], title: str, ylabel: str) -> str:
@@ -102,7 +325,7 @@ def execute_sql_query(query: str, agent_understanding: str = "") -> str:
         print(f"🗄️ [Running SQL]: {query}")
 
     try:
-        conn = sqlite3.connect('football_consul.db')
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
         cursor = conn.cursor()
         cursor.execute(query)
         result = cursor.fetchall()
@@ -145,7 +368,7 @@ available_functions = {
 # 3. System Instructions & Schemas
 system_instruction = """
 You are 'Football Consul', an expert AI football data analyst.
-You have access to a tool called `execute_sql_query`. Use it to query the SQLite database to answer user questions.
+You have access to a tool called `execute_sql_query`. Use it to query the PostgreSQL database to answer user questions.
 
 DATABASE SCHEMA:
 
@@ -254,7 +477,7 @@ ollama_tools = [
         'type': 'function',
         'function': {
             'name': 'execute_sql_query',
-            'description': 'Executes a SQL query on the SQLite database.',
+            'description': 'Executes a SQL query on the PostgreSQL database.',
             'parameters': {
                 'type': 'object',
                 'properties': {
@@ -419,6 +642,24 @@ def get_or_create_chat(chat_id):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input = update.message.text
     chat_id = update.message.chat_id
+
+    # --- 1. CHECK BALANCE ---
+    balance = get_query_balance(chat_id)
+
+    if balance <= 0:
+        # Out of credits! Block the AI and send the invoice.
+        await update.message.reply_text("⏳ You are out of Pro Analyses! Buy a 200-Analysis Pack to keep mining deep football stats.")
+        await send_premium_invoice(chat_id, context)
+        return
+
+    # --- 2. SPEND CREDIT ---
+    spend_one_query(chat_id)
+
+    # Let them know if they are running low
+    if balance == 2:
+        await update.message.reply_text("⚠️ *Note:* You only have 1 analysis remaining after this!", parse_mode='Markdown')
+
+    # --- 3. PROCEED TO AI ---
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
 
     try:
@@ -429,17 +670,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             response = chat_session.send_message(user_input)
 
-        # --- NEW: COMBINED TELEGRAM OUTPUT LOGIC ---
+        # --- COMBINED TELEGRAM OUTPUT LOGIC ---
         if os.path.exists('chart.png'):
             await context.bot.send_chat_action(chat_id=chat_id, action='upload_photo')
             with open('chart.png', 'rb') as photo:
 
                 # Telegram captions have a maximum limit of ~1024 characters.
-                # If the AI wrote a short text, bundle them together!
                 if len(response.text) < 1000:
                     await update.message.reply_photo(photo=photo, caption=response.text)
                 else:
-                    # If the AI wrote a massive essay, send them separately so it doesn't crash
                     await update.message.reply_photo(photo=photo)
                     await update.message.reply_text(response.text)
 
@@ -449,22 +688,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # No chart was generated, just send the normal text
             await update.message.reply_text(response.text)
 
+        # --- 4. LOG THE SUCCESSFUL CONVERSATION ---
+        # This saves the user's question and the AI's final answer to the database
+        log_conversation(chat_id, user_input, response.text)
+
     except Exception as e:
         error_msg = f"⚠️ Oops, I hit an error: {e}"
         print(error_msg)
         await update.message.reply_text(error_msg)
 
-
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚽ Football Consul is ready! Send me a message to analyze some stats.")
+        # --- 5. LOG THE ERROR ---
+        # This saves the error to the database so you can debug what the user asked that broke it
+        log_conversation(chat_id, user_input, error_msg)
 
 
 def run_telegram_bot():
     print("🤖 Starting Telegram Bot Mode...")
     app = ApplicationBuilder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
+
+    # --- COMMANDS ---
     app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("leagues", leagues_command))
+    # <-- Add this line!
+    app.add_handler(CommandHandler("balance", balance_command))
+
+    # --- BUTTONS ---
+    app.add_handler(CallbackQueryHandler(button_callback))
+
+    # --- PAYMENTS ---
+    app.add_handler(PreCheckoutQueryHandler(precheckout_callback))
+    app.add_handler(MessageHandler(
+        filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
+
+    # --- MAIN TEXT ---
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND, handle_message))
+
     print("⚽ Bot is polling for messages! Press Ctrl+C to stop.")
     app.run_polling()
 

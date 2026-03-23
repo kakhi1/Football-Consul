@@ -14,7 +14,7 @@ It uses Playwright and BeautifulSoup to extract match stats and lineups into a l
 - **📱 Unified Telegram Output:** Delivers charts and text breakdowns as a single, combined message (Photo + Caption) for a cleaner experience.
 - **🪟 Terminal Auto-Open:** Charts automatically pop open in your default Windows photo viewer when running in Terminal mode.
 - **🕷️ Automated Data Extraction:** Scrapes match stats, xG, possession, and lineups using `playwright` and `bs4`.
-- **🗄️ Normalized SQLite Database:** Stores matches, teams, players, and match lineups efficiently.
+- **🗄️ Serverless PostgreSQL Database:** Stores matches, teams, players, and match lineups efficiently in the cloud using Neon.
 
 ---
 
@@ -23,6 +23,7 @@ It uses Playwright and BeautifulSoup to extract match stats and lineups into a l
 - Python 3.8+
 - A Telegram Bot Token (from BotFather)
 - A Google Gemini API Key
+- A free Neon.tech account and PostgreSQL connection string
 - _Optional:_ [Ollama](https://ollama.com/) installed locally (if you plan to use local models)
 
 ---
@@ -88,6 +89,9 @@ AI_MODEL=google           # Set to 'google' for Gemini, or 'ollama' for local mo
 # Ollama Configuration (Used if AI_MODEL=ollama)
 OLLAMA_MODEL=llama3.1               # The conversational model
 SECOND_OLLAMA_MODEL=qwen2.5-coder   # The logic/SQL engine model
+
+# Database Configuration
+DATABASE_URL=postgresql://user:password@ep-your-host.region.aws.neon.tech/neondb?sslmode=require
 ```
 
 You may change the model name to your preferred Gemini model if needed.
@@ -129,7 +133,7 @@ python app.py
 
 1. Playwright scrapes match data.
 2. BeautifulSoup parses and normalizes the HTML.
-3. Data is stored in a structured SQLite database.
+3. Data is stored in a structured Postgres database hosted on Neon.
 4. Gemini converts natural language questions into SQL queries.
 5. The bot executes the query and returns an intelligent response.
 
@@ -190,6 +194,19 @@ HAVING AVG(away_corners) < 3.5;
 
 ---
 
+## 💡 Roadmap & Monetization
+
+We are actively exploring several avenues to expand and monetize Football Consul:
+
+- **The "Bettor’s Edge" (B2C Subscription):** A freemium model where basic stats are free, but advanced predictive queries, xG analysis, and "Last N Games" trends require a Pro tier.
+- **Affiliate Partnerships:** Integrated odds comparison, offering users direct betting links alongside their statistical insights.
+- **Scout-as-a-Service:** A premium access tier designed for football YouTubers, journalists, and content creators who need instant, deep data without the high cost of enterprise tools like Opta.
+- **White-Label Solutions (B2B):** Licensing the core natural-language-to-SQL engine to sports news websites or local football clubs.
+
+---
+
+---
+
 ## Project Structure (Example)
 
 ```
@@ -197,8 +214,6 @@ football-consul/
 │
 ├── main_parser.py
 ├── chat.py
-├── database.py
-├── football_consul.db
 ├── requirements.txt
 ├── .env
 └── README.md

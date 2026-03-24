@@ -1,3 +1,4 @@
+from telegram import LabeledPrice
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -103,7 +104,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Add the Top-Up button here as well!
         keyboard = [[InlineKeyboardButton(
-            "💳 Buy 200 Pro Analyses ($5.00)", callback_data='buy_more')]]
+            "⭐️ Buy 200 Pro Analyses (250 Stars)", callback_data='buy_more')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await query.message.reply_text(
@@ -190,17 +191,21 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def send_premium_invoice(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-    """Sends the paywall invoice to the user."""
-    title = "⚽ 200 Pro Analyses"
-    description = "Get 200 AI searches for Premier League, La Liga, Serie A, Bundesliga, UCL, and UEL stats."
-    payload = "200_analyses_pack"
-    currency = "USD"
+async def send_premium_invoice(chat_id: int, context):
+    """Sends an invoice using Telegram Stars 🌟"""
 
-    # Updated to 200 Analyses
-    prices = [LabeledPrice("200 Pro Analyses", 500)]
+    title = "Football Consul - Pro Pack ⚽"
+    description = "Unlock 200 Deep-Dive AI Football Analyses and custom radar charts!"
+    payload = "pro_pack_200"
 
-    provider_token = os.getenv("PAYMENT_PROVIDER_TOKEN")
+    # 1. Empty string for Stars!
+    provider_token = ""
+
+    # 2. XTR is the currency code for Telegram Stars
+    currency = "XTR"
+
+    # 3. The price in Stars (e.g., 250 Stars)
+    prices = [LabeledPrice("200 AI Analyses", 1)]
 
     await context.bot.send_invoice(
         chat_id=chat_id,
@@ -209,15 +214,16 @@ async def send_premium_invoice(chat_id: int, context: ContextTypes.DEFAULT_TYPE)
         payload=payload,
         provider_token=provider_token,
         currency=currency,
-        prices=prices
+        prices=prices,
+        start_parameter="pro-pack-start"
     )
 
 
-async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Answers the PreCheckoutQuery to confirm the bot is ready to charge."""
+async def precheckout_callback(update, context):
+    """Answers the PreQecheckoutQuery"""
     query = update.pre_checkout_query
-    if query.invoice_payload != "50_query_refill_pack":
-        await query.answer(ok=False, error_message="Something went wrong with the payload.")
+    if query.invoice_payload != "pro_pack_200":
+        await query.answer(ok=False, error_message="Something went wrong...")
     else:
         await query.answer(ok=True)
 
@@ -227,11 +233,22 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
     chat_id = update.message.chat_id
 
     # Add 50 new queries to their balance in PostgreSQL!
-    add_purchased_queries(chat_id, 50)
+    add_purchased_queries(chat_id, 200)
 
-    await update.message.reply_text(
-        "🎉 Payment successful! 50 new queries have been added to your account. What stats should we look at next?"
-    )
+    await update.message.reply_text("🎉 Payment successful! 200 new Deep-Dive Analyses have been added to your account. What stats should we look at next?")
+
+    # --- 3. SEND THE ADMIN SALE ALERT TO YOU ---
+    admin_id = os.getenv("ADMIN_CHAT_ID")
+    if admin_id:
+        # Get the user's name so you know who bought it
+        username = update.effective_user.username or update.effective_user.first_name
+
+        # Send the alert directly to your personal Telegram app
+        await context.bot.send_message(
+            chat_id=admin_id,
+            text=f"💰 <b>NEW SALE!</b>\n\nUser @{username} just bought a Pro Pack!",
+            parse_mode='HTML'
+        )
 
 
 def log_conversation(chat_id: int, user_message: str, ai_response: str):
@@ -372,7 +389,7 @@ def generate_radar_chart(categories: list[str], player_data: dict, title: str) -
                     linewidth=2, label=player_name)
             ax.fill(angles, values_closed, color=color, alpha=0.25)
 
-# 5. Add Legend and Title
+        # 5. Add Legend and Title
         # Wrap the title so it doesn't get cut off the edges!
         wrapped_title = "\n".join(textwrap.wrap(title, width=45))
         plt.title(wrapped_title, size=18, color='white', weight='bold', y=1.1)

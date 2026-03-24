@@ -19,5 +19,6 @@ check_everton.py
 clean_database.py
 migrate.py
 system_prompt.txt
+serverconfig.txt
 # Playwright
 .playwright/

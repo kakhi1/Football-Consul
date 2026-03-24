@@ -1,3 +1,5 @@
+import traceback
+import requests
 import time
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -8,6 +10,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
+
+
+def send_admin_alert(message: str):
+    """Sends a direct message to your personal Telegram account."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    admin_id = os.getenv("ADMIN_CHAT_ID")
+    if token and admin_id:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        requests.post(url, json={"chat_id": admin_id, "text": message})
 
 
 def setup_database():
@@ -266,7 +277,10 @@ def scrape_league(league_name, target_url):
         print(
             f"Expanding all past {league_name} matches... this might take a moment.")
         while True:
-            show_more_btn = page.locator("text='Show more matches'")
+            # show_more_btn = page.locator("text='Show more matches'")
+            # Tell Playwright to look specifically inside the 'Results' container
+            show_more_btn = page.locator(
+                "#tournament-page-summary-results-more")
             if show_more_btn.is_visible():
                 try:
                     show_more_btn.click()
@@ -358,21 +372,28 @@ def scrape_league(league_name, target_url):
 
 
 if __name__ == "__main__":
-    leagues_to_scrape = [
-        {"name": "Premier League",
-            "url": "https://www.flashscore.com/football/england/premier-league/results/"},
-        {"name": "LaLiga", "url": "https://www.flashscore.com/football/spain/laliga/results/"},
-        {"name": "Serie A",
-            "url": "https://www.flashscore.com/football/italy/serie-a/results/"},
-        {"name": "Bundesliga",
-            "url": "https://www.flashscore.com/football/germany/bundesliga/results/"},
-        {"name": "Champions League",
-            "url": "https://www.flashscore.com/football/europe/champions-league/results/"},
-        {"name": "Europa League",
-            "url": "https://www.flashscore.com/football/europe/europa-league/results/"},
-    ]
+    try:
+        leagues_to_scrape = [
+            {"name": "Premier League",
+                "url": "https://www.flashscore.com/football/england/premier-league/results/"},
+            {"name": "LaLiga",
+                "url": "https://www.flashscore.com/football/spain/laliga/results/"},
+            {"name": "Serie A",
+                "url": "https://www.flashscore.com/football/italy/serie-a/results/"},
+            {"name": "Bundesliga",
+                "url": "https://www.flashscore.com/football/germany/bundesliga/results/"},
+            {"name": "Champions League",
+                "url": "https://www.flashscore.com/football/europe/champions-league/results/"},
+            {"name": "Europa League",
+                "url": "https://www.flashscore.com/football/europe/europa-league/results/"},
+        ]
 
-    for league in leagues_to_scrape:
-        scrape_league(league["name"], league["url"])
+        for league in leagues_to_scrape:
+            scrape_league(league["name"], league["url"])
 
-    print("\n🏆 All requested leagues have been scraped and saved!")
+        print("\n🏆 All requested leagues have been scraped and saved!")
+    except Exception as e:
+        error_details = traceback.format_exc()
+        error_message = f"🚨 <b>PARSER CRASHED!</b>\n\n<b>Error:</b> {e}\n\n<code>{error_details[:500]}</code>"
+        send_admin_alert(error_message)
+        print("Crash alert sent to admin.")

@@ -24,6 +24,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from telegram import Update, LabeledPrice
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, PreCheckoutQueryHandler, filters, ContextTypes
+from datetime import datetime
 # 1. Setup & Environment
 load_dotenv()
 PLATFORM = os.getenv("PLATFORM", "terminal").lower()
@@ -205,7 +206,7 @@ async def send_premium_invoice(chat_id: int, context):
     currency = "XTR"
 
     # 3. The price in Stars (e.g., 250 Stars)
-    prices = [LabeledPrice("200 AI Analyses", 1)]
+    prices = [LabeledPrice("200 AI Analyses", 200)]
 
     await context.bot.send_invoice(
         chat_id=chat_id,
@@ -493,14 +494,24 @@ available_functions = {
     'generate_radar_chart': generate_radar_chart,  # <-- Add this line!
 }
 
-# Load the AI's brain from the hidden text file
+# # Load the AI's brain from the hidden text file
+# try:
+#     with open("system_prompt.txt", "r", encoding="utf-8") as file:
+#         system_instruction = file.read()
+# except FileNotFoundError:
+#     print("⚠️ ERROR: system_prompt.txt not found! Please create it.")
+#     exit(1)
+# 1. Load the AI's brain from the hidden text file
 try:
     with open("system_prompt.txt", "r", encoding="utf-8") as file:
-        system_instruction = file.read()
+        raw_prompt = file.read()
 except FileNotFoundError:
     print("⚠️ ERROR: system_prompt.txt not found! Please create it.")
     exit(1)
 
+# 2. Inject today's date dynamically to prevent Time Blindness
+current_date = datetime.now().strftime("%Y-%m-%d")
+system_instruction = raw_prompt.replace("[TODAY_DATE]", current_date)
 
 ollama_tools = [
     {

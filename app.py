@@ -1,3 +1,4 @@
+import re
 from telegram import LabeledPrice
 import numpy as np
 import seaborn as sns
@@ -29,18 +30,28 @@ from datetime import datetime
 load_dotenv()
 PLATFORM = os.getenv("PLATFORM", "terminal").lower()
 AI_MODEL = os.getenv("AI_MODEL", "google").lower()
-
 # Model 1: The Conversationalist (Summarizes data and talks to the user)
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
 # Model 2: The Logic Engine (Strictly for analyzing queries and calling SQL tools)
 SECOND_OLLAMA_MODEL = os.getenv("SECOND_OLLAMA_MODEL", "qwen2.5-coder")
 
 # --- INITIALIZE GOOGLE CLIENT GLOBALLY SO IT DOESN'T CLOSE ---
+# google_client = None
+# if AI_MODEL != "ollama":
+#     from google import genai
+#     from google.genai import types
+#     google_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+# --- INITIALIZE GOOGLE CLIENT GLOBALLY SO IT DOESN'T CLOSE ---
 google_client = None
 if AI_MODEL != "ollama":
     from google import genai
     from google.genai import types
-    google_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+    # Initialize using Vertex AI instead of AI Studio
+    google_client = genai.Client(
+        vertexai=True,
+        project=os.getenv("GOOGLE_CLOUD_PROJECT"),
+        location=os.getenv("VERTEX_LOCATION")
+    )
 
 
 if PLATFORM == "telegram":
@@ -57,6 +68,8 @@ agent_memory = {}
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
     welcome_text = (
         "⚽ *Welcome to Football Consul!*\n\n"
         "I am your AI data analyst. Send me a message to mine deep football stats, "
@@ -88,6 +101,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles all button clicks from inline keyboards."""
     query = update.callback_query
+    if not query or not query.message:
+        return
     chat_id = query.message.chat_id
 
     await query.answer()
@@ -148,7 +163,7 @@ def get_query_balance(chat_id: int) -> int:
         conn.commit()
 
     conn.close()
-    return user['query_balance']
+    return user['query_balance'] if user else 0
 
 
 def spend_one_query(chat_id: int):
@@ -177,6 +192,8 @@ def add_purchased_queries(chat_id: int, amount: int = 50):
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows the user's balance and provides a top-up button."""
+    if not update.message:
+        return
     chat_id = update.message.chat_id
     balance = get_query_balance(chat_id)
 
@@ -231,6 +248,8 @@ async def precheckout_callback(update, context):
 
 async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the successful payment and updates the database."""
+    if not update.message or not update.effective_user:
+        return
     chat_id = update.message.chat_id
 
     # Add 50 new queries to their balance in PostgreSQL!
@@ -271,6 +290,8 @@ def log_conversation(chat_id: int, user_message: str, ai_response: str):
 
 async def leagues_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows the user which leagues are currently supported."""
+    if not update.message:
+        return
     leagues_text = (
         "🏆 *Currently Supported Leagues:*\n\n"
         "🇬🇧 Premier League\n"
@@ -310,7 +331,7 @@ def generate_bar_chart(labels: list[str], values: list[float], title: str, ylabe
 
         # 3. Add Exact Data Labels
         for container in ax.containers:
-            ax.bar_label(container, fmt='%.2f', padding=5,
+            ax.bar_label(container, fmt='%.2f', padding=5,  # type: ignore
                          color='white', weight='bold', fontsize=12)
 
         # 4. Clean up the aesthetics
@@ -367,8 +388,8 @@ def generate_radar_chart(categories: list[str], player_data: dict, title: str) -
         fig.patch.set_facecolor('#121212')
         ax.set_facecolor('#1A1A1A')
 
-        ax.set_theta_offset(np.pi / 2)
-        ax.set_theta_direction(-1)
+        ax.set_theta_offset(np.pi / 2)  # type: ignore
+        ax.set_theta_direction(-1)  # type: ignore
 
         ax.set_xticks(angles[:-1])
         ax.set_xticklabels(categories, color='white', size=12, weight='bold')
@@ -448,9 +469,9 @@ def manage_memory(action: str, data: dict) -> str:
 
 def execute_sql_query(query: str, agent_understanding: str = "") -> str:
     """Executes a SQL query on the football_consul.db SQLite database."""
-    if PLATFORM != "telegram":
-        print(f"\n🤔 [Agent Thinking]: {agent_understanding}")
-        print(f"🗄️ [Running SQL]: {query}")
+    # if PLATFORM != "telegram":
+    print(f"\n🤔 [Agent Thinking]: {agent_understanding}")
+    print(f"🗄️ [Running SQL]: {query}")
 
     try:
         conn = psycopg2.connect(os.getenv("DATABASE_URL"))
@@ -482,7 +503,7 @@ def execute_sql_query(query: str, agent_understanding: str = "") -> str:
         error_response = {
             "CRITICAL_FAILURE": True,
             "ERROR_MESSAGE": str(e),
-            "INSTRUCTION": "The SQL query failed. You are STRICTLY FORBIDDEN from guessing the answer. You MUST correct the syntax and call the execute_sql_query tool again."
+            "INSTRUCTION": f"The SQL query failed with the error above. You are STRICTLY FORBIDDEN from guessing the answer. Read the error carefully. If it says 'column does not exist', check your schema rules to ensure you are querying the correct table (e.g., club vs world cup). Correct the syntax and call execute_sql_query again."
         }
         return json.dumps(error_response)
 
@@ -615,13 +636,13 @@ class OllamaMultiModelSession:
 
                     self.messages.append({
                         'role': 'tool',
-                        'content': str(function_response),
+                        'content': function_response,
                         'name': func_name
                     })
 
                     # Check if the tool returned an error string
 
-                    response_str = str(function_response)
+                    response_str = function_response
                     if response_str.startswith("SQL Error") or "CRITICAL_FAILURE" in response_str:
                         has_error = True
 
@@ -660,8 +681,9 @@ def create_chat_session():
     else:
         if PLATFORM != "telegram":
             print("☁️ Using Google Gemini")
-        # Use the global client here!
-    return google_client.chats.create(
+    if AI_MODEL != "ollama" and google_client is None:
+        raise ValueError("Google client is not initialized.")
+    return google_client.chats.create(  # type: ignore
         model=os.getenv("GOOGLE_MODEL_NAME"),
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
@@ -683,6 +705,8 @@ def get_or_create_chat(chat_id):
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
     user_input = update.message.text
     chat_id = update.message.chat_id
 
@@ -709,9 +733,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_session = get_or_create_chat(chat_id)
 
         if AI_MODEL == "ollama":
-            response = chat_session.send_message_sync(user_input)
+            response = chat_session.send_message_sync(user_input)  # type: ignore
         else:
-            response = chat_session.send_message(user_input)
+            response = chat_session.send_message(user_input)  # type: ignore
 
         # --- COMBINED TELEGRAM OUTPUT LOGIC ---
         if os.path.exists('chart.png'):
@@ -750,7 +774,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def run_telegram_bot():
     print("🤖 Starting Telegram Bot Mode...")
-    app = ApplicationBuilder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
+    # app = ApplicationBuilder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
+    app = (
+        ApplicationBuilder()
+        .token("YOUR_TOKEN_HERE")  # Keep your existing token
+        .read_timeout(30)
+        .write_timeout(30)
+        .connect_timeout(30)
+        .pool_timeout(30)
+        .build()
+    )
 
     # --- COMMANDS ---
     app.add_handler(CommandHandler("start", start_command))
@@ -789,12 +822,16 @@ def run_terminal_chat():
 
         try:
             if AI_MODEL == "ollama":
-                response = chat.send_message_sync(user_input)
+                response = chat.send_message_sync(user_input)  # type: ignore
             else:
-                response = chat.send_message(user_input)
+                response = chat.send_message(user_input)  # type: ignore
 
             text_output = response.text if response.text else "Here is your chart!"
-            print(f"\n⚽ Football Consul: {text_output}")
+            # Strip HTML tags so the terminal output looks clean
+            clean_text = re.sub(r'<[^>]+>', '', text_output)
+
+            print(f"\n⚽ Football Consul: {clean_text}")
+            # print(f"\n⚽ Football Consul: {text_output}")
         except Exception as e:
             print(f"\n⚠️ Oops, I hit an error: {e}")
 

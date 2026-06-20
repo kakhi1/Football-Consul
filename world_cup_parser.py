@@ -9,6 +9,7 @@ import psycopg2
 import os
 from dotenv import load_dotenv
 import socket
+
 # --- ADD THIS BLOCK TO FORCE IPv4 ---
 # This prevents the "Cannot assign requested address" IPv6 error with Neon DB
 old_getaddrinfo = socket.getaddrinfo
@@ -58,16 +59,10 @@ def clean_stat_value(val):
 def setup_database():
     conn = psycopg2.connect(DB_URL)
     cursor = conn.cursor()
-    # --- ADD THESE TWO LINES TO FORCE-DROP THE OLD TABLES ---
-    # print("Dropping old tables to update schema...")
-    # cursor.execute("DROP TABLE IF EXISTS match_lineups CASCADE;")
-    # cursor.execute("DROP TABLE IF EXISTS match_stats CASCADE;")
-    # --------------------------------------------------------
 
-    # 1. Match Stats Table
-# 1. Match Stats Table
+    # 1. World Cup Match Stats Table
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS match_stats (
+        CREATE TABLE IF NOT EXISTS world_cup_match_stats (
             match_id TEXT PRIMARY KEY,
             match_date TEXT,
             competition TEXT,
@@ -111,7 +106,11 @@ def setup_database():
             home_errors_leading_to_shot INTEGER, away_errors_leading_to_shot INTEGER,
             home_errors_leading_to_goal INTEGER, away_errors_leading_to_goal INTEGER,
             home_xgot_faced REAL, away_xgot_faced REAL,
-            home_goals_prevented REAL, away_goals_prevented REAL
+            home_goals_prevented REAL, away_goals_prevented REAL,
+            
+            -- Added for World Cup
+            home_red_cards INTEGER, away_red_cards INTEGER,
+            home_headed_goals INTEGER, away_headed_goals INTEGER
         )
     ''')
 
@@ -123,9 +122,9 @@ def setup_database():
         )
     ''')
 
-    # 3. Match Lineups (The Bridge Table)
+    # 3. World Cup Match Lineups
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS match_lineups (
+        CREATE TABLE IF NOT EXISTS world_cup_match_lineups (
             lineup_id SERIAL PRIMARY KEY,
             match_id TEXT,
             player_id TEXT,
@@ -133,7 +132,7 @@ def setup_database():
             shirt_number TEXT,
             is_starter BOOLEAN,
             rating REAL,
-            FOREIGN KEY(match_id) REFERENCES match_stats(match_id),
+            FOREIGN KEY(match_id) REFERENCES world_cup_match_stats(match_id),
             FOREIGN KEY(player_id) REFERENCES players(player_id),
             UNIQUE(match_id, player_id)
         )
@@ -145,15 +144,15 @@ def setup_database():
 
 def get_existing_match_ids(conn):
     cursor = conn.cursor()
-    cursor.execute("SELECT match_id FROM match_stats")
+    cursor.execute("SELECT match_id FROM world_cup_match_stats")
     return {row[0] for row in cursor.fetchall()}
 
 
 def parse_and_save_stats(html_content, conn, match_id, competition, match_stage, home_team, away_team, home_score, away_score):
-    """Parses the main Stats tab and saves to match_stats."""
+    """Parses the main Stats tab and saves to world_cup_match_stats."""
     soup = BeautifulSoup(html_content, 'html.parser')
 
-    # 1. INITIALIZE ALL FIELDS TO NONE (Including the new advanced stats)
+    # 1. INITIALIZE ALL FIELDS TO NONE
     stats = {
         'match_id': match_id, 'match_date': None, 'competition': competition, 'match_stage': match_stage,
         'home_team': home_team, 'away_team': away_team,
@@ -188,7 +187,11 @@ def parse_and_save_stats(html_content, conn, match_id, competition, match_stage,
         'home_errors_leading_to_shot': None, 'away_errors_leading_to_shot': None,
         'home_errors_leading_to_goal': None, 'away_errors_leading_to_goal': None,
         'home_xgot_faced': None, 'away_xgot_faced': None,
-        'home_goals_prevented': None, 'away_goals_prevented': None
+        'home_goals_prevented': None, 'away_goals_prevented': None,
+        
+        # New World Cup Stats
+        'home_red_cards': None, 'away_red_cards': None,
+        'home_headed_goals': None, 'away_headed_goals': None
     }
 
     # Extract and format the Match Date
@@ -216,10 +219,11 @@ def parse_and_save_stats(html_content, conn, match_id, competition, match_stage,
         "Throw ins": "throw_ins", "Tackles": "tackles_pct", "Duels won": "duels_won",
         "Clearances": "clearances", "Interceptions": "interceptions",
         "Errors leading to shot": "errors_leading_to_shot", "Errors leading to goal": "errors_leading_to_goal",
-        "Goalkeeper saves": "goalkeeper_saves", "xGOT faced": "xgot_faced", "Goals prevented": "goals_prevented"
+        "Goalkeeper saves": "goalkeeper_saves", "xGOT faced": "xgot_faced", "Goals prevented": "goals_prevented",
+        "Red cards": "red_cards", "Headed goals": "headed_goals"
     }
 
-# Extract Statistics
+    # Extract Statistics
     rows = soup.find_all('div', attrs={'data-testid': 'wcl-statistics'})
     for row in rows:
         category_elem = row.find(
@@ -231,7 +235,6 @@ def parse_and_save_stats(html_content, conn, match_id, competition, match_stage,
             category = category_elem.get_text(strip=True)
 
             for key, suffix in stat_mapping.items():
-                # --- FIX: Change 'in' to '==' for exact matching ---
                 if key == category:
                     home_val = values[0].get_text(separator=" ", strip=True)
                     away_val = values[1].get_text(separator=" ", strip=True)
@@ -240,10 +243,9 @@ def parse_and_save_stats(html_content, conn, match_id, competition, match_stage,
                     stats[f'away_{suffix}'] = clean_stat_value(away_val)
                     break
 
-    # 2. UPDATED INSERT STATEMENT WITH ALL FIELDS
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO match_stats (
+        INSERT INTO world_cup_match_stats (
             match_id, match_date, competition, match_stage, home_team, away_team, 
             home_score, away_score, home_formation, away_formation,
             home_xg, away_xg, home_possession_pct, away_possession_pct, home_total_shots, away_total_shots,
@@ -259,7 +261,8 @@ def parse_and_save_stats(html_content, conn, match_id, competition, match_stage,
             home_throw_ins, away_throw_ins, home_tackles_pct, away_tackles_pct, home_duels_won, away_duels_won,
             home_clearances, away_clearances, home_interceptions, away_interceptions,
             home_errors_leading_to_shot, away_errors_leading_to_shot, home_errors_leading_to_goal, away_errors_leading_to_goal,
-            home_xgot_faced, away_xgot_faced, home_goals_prevented, away_goals_prevented
+            home_xgot_faced, away_xgot_faced, home_goals_prevented, away_goals_prevented,
+            home_red_cards, away_red_cards, home_headed_goals, away_headed_goals
         ) VALUES (
             %(match_id)s, %(match_date)s, %(competition)s, %(match_stage)s, %(home_team)s, %(away_team)s, 
             %(home_score)s, %(away_score)s, %(home_formation)s, %(away_formation)s,
@@ -276,7 +279,8 @@ def parse_and_save_stats(html_content, conn, match_id, competition, match_stage,
             %(home_throw_ins)s, %(away_throw_ins)s, %(home_tackles_pct)s, %(away_tackles_pct)s, %(home_duels_won)s, %(away_duels_won)s,
             %(home_clearances)s, %(away_clearances)s, %(home_interceptions)s, %(away_interceptions)s,
             %(home_errors_leading_to_shot)s, %(away_errors_leading_to_shot)s, %(home_errors_leading_to_goal)s, %(away_errors_leading_to_goal)s,
-            %(home_xgot_faced)s, %(away_xgot_faced)s, %(home_goals_prevented)s, %(away_goals_prevented)s
+            %(home_xgot_faced)s, %(away_xgot_faced)s, %(home_goals_prevented)s, %(away_goals_prevented)s,
+            %(home_red_cards)s, %(away_red_cards)s, %(home_headed_goals)s, %(away_headed_goals)s
         )
         ON CONFLICT (match_id) DO UPDATE SET
             home_score = EXCLUDED.home_score,
@@ -286,7 +290,7 @@ def parse_and_save_stats(html_content, conn, match_id, competition, match_stage,
 
 
 def parse_and_save_lineups(html_content, conn, match_id):
-    """Parses the Lineups tab and populates the players and match_lineups tables."""
+    """Parses the Lineups tab and populates the players and world_cup_match_lineups tables."""
     soup = BeautifulSoup(html_content, 'html.parser')
     cursor = conn.cursor()
 
@@ -305,7 +309,7 @@ def parse_and_save_lineups(html_content, conn, match_id):
     if len(formations_found) >= 2:
         home_formation = formations_found[0]
         away_formation = formations_found[1]
-        cursor.execute('UPDATE match_stats SET home_formation = %s, away_formation = %s WHERE match_id = %s',
+        cursor.execute('UPDATE world_cup_match_stats SET home_formation = %s, away_formation = %s WHERE match_id = %s',
                        (home_formation, away_formation, match_id))
 
     # 2. Extract Players
@@ -353,7 +357,7 @@ def parse_and_save_lineups(html_content, conn, match_id):
                         (player_id, name))
 
                     cursor.execute('''
-                        INSERT INTO match_lineups (match_id, player_id, team_type, shirt_number, is_starter, rating)
+                        INSERT INTO world_cup_match_lineups (match_id, player_id, team_type, shirt_number, is_starter, rating)
                         VALUES (%s, %s, %s, %s, %s, %s)
                         ON CONFLICT (match_id, player_id) DO NOTHING
                     ''', (match_id, player_id, team_type, shirt_number, is_starter, rating))
@@ -375,7 +379,6 @@ def scrape_league(league_name, target_url):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
 
-        # --- FIX 1: Removed 'stylesheet' from blocklist so buttons remain visible ---
         page.route("**/*", lambda route: route.abort()
                    if route.request.resource_type in ["image", "media", "font"]
                    else route.continue_())
@@ -383,7 +386,6 @@ def scrape_league(league_name, target_url):
         print(f"Loading {league_name} results page...")
         page.goto(target_url, wait_until='domcontentloaded')
 
-        # --- FIX 2: Dismiss Cookie Banner ---
         try:
             page.locator('#onetrust-accept-btn-handler').click(timeout=3000)
         except:
@@ -391,19 +393,21 @@ def scrape_league(league_name, target_url):
 
         page.wait_for_selector('.event__match', timeout=10000)
 
-        print(
-            f"Expanding all past {league_name} matches... this might take a moment.")
+        print(f"Expanding all past {league_name} matches... this might take a moment.")
 
-        while True:
+        clicks = 0
+        max_clicks = 5
+
+        while clicks < max_clicks:
             try:
-                show_more_btn = page.locator(
-                    "button:has-text('Show more matches')")
+                show_more_btn = page.locator("button:has-text('Show more matches')")
 
                 if show_more_btn.is_visible():
                     show_more_btn.scroll_into_view_if_needed()
                     page.wait_for_timeout(1000)
                     show_more_btn.click(force=True)
-                    print("Clicked 'Show more matches'...")
+                    clicks += 1
+                    print(f"Clicked 'Show more matches'... ({clicks}/{max_clicks})")
                     page.wait_for_timeout(3000)
                 else:
                     page.keyboard.press("End")
@@ -423,11 +427,26 @@ def scrape_league(league_name, target_url):
         match_list = []
 
         current_stage = "Regular Season"
+        current_competition = league_name
 
-        for element in soup.find_all(['div'], class_=lambda c: c and ('event__round' in c or 'event__match' in c)):
+        for element in soup.find_all(['div'], class_=lambda c: c and ('event__round' in c or 'event__match' in c or 'wcl-header_' in c or 'headerLeague' in c)):
             classes = element.get('class', [])
 
-            if 'event__round' in classes:
+            if 'wcl-header_' in classes or 'headerLeague' in classes:
+                cat_el = element.find('span', class_=lambda c: c and 'category-text' in c)
+                title_el = element.find('span', class_=lambda c: c and 'title-text' in c)
+                
+                cat = cat_el.text.strip() if cat_el else ""
+                title = title_el.text.strip() if title_el else ""
+                
+                if cat and title:
+                    current_competition = f"{cat} - {title}"
+                elif title:
+                    current_competition = title
+                elif cat:
+                    current_competition = cat
+
+            elif 'event__round' in classes:
                 current_stage = element.text.strip()
 
             elif 'event__match' in classes:
@@ -450,88 +469,82 @@ def scrape_league(league_name, target_url):
                         match_list.append({
                             'id': match_id, 'home': home_team, 'away': away_team,
                             'h_score': int(home_score), 'a_score': int(away_score),
-                            'competition': league_name,
+                            'competition': current_competition,
                             'match_stage': current_stage
                         })
                 except AttributeError:
                     continue
 
-        print(
-            f"\nFound {len(match_list)} finished matches for {league_name}. Beginning deep extraction...\n")
+        print(f"\nFound {len(match_list)} finished matches for {league_name}. Beginning deep extraction...\n")
 
         for m in match_list:
             if m['id'] in existing_ids:
-                print(
-                    f"⏭️ Skipping {m['home']} vs {m['away']} (Already in DB)")
+                print(f"⏭️ Skipping {m['home']} vs {m['away']} (Already in DB)")
                 continue
 
-            # --- FIX 3: Robust Retry Loop for parsing matches ---
             success = False
-            for attempt in range(2):  # Will try up to 2 times if it fails
+            for attempt in range(2):
                 try:
-                    page.goto(
-                        f"https://www.flashscore.com/match/{m['id']}/", wait_until='domcontentloaded')
+                    page.goto(f"https://www.flashscore.com/match/{m['id']}/", wait_until='domcontentloaded')
 
-                    # Dismiss cookie banner on individual match pages if it pops up
                     try:
-                        page.locator(
-                            '#onetrust-accept-btn-handler').click(timeout=2000)
+                        page.locator('#onetrust-accept-btn-handler').click(timeout=2000)
                     except:
                         pass
 
-                    # Try capturing stats
-                    try:
-                        stats_tab = page.locator(
-                            'a[data-analytics-alias="match-statistics"]')
-                        # force=True bypasses invisible obstacles
-                        stats_tab.click(timeout=5000, force=True)
-                        page.wait_for_selector(
-                            'div[data-testid="wcl-statistics"]', timeout=5000)
+                    # Wait for page to be minimally loaded first
+                    page.wait_for_selector('.duelParticipant', timeout=5000)
 
-                        parse_and_save_stats(page.content(), conn, m['id'], m['competition'], m['match_stage'],
-                                             m['home'], m['away'], m['h_score'], m['a_score'])
-                        stats_success = True
-                    except Exception:
+                    try:
+                        stats_tab = page.locator('a[data-analytics-alias="match-statistics"]')
+                        if stats_tab.count() > 0 and stats_tab.is_visible():
+                            stats_tab.click(timeout=5000, force=True)
+                            page.wait_for_selector('div[data-testid="wcl-statistics"]', timeout=5000)
+
+                            parse_and_save_stats(page.content(), conn, m['id'], m['competition'], m['match_stage'],
+                                                 m['home'], m['away'], m['h_score'], m['a_score'])
+                            stats_success = True
+                        else:
+                            stats_success = False
+                    except Exception as e:
+                        conn.rollback()
                         stats_success = False
 
-                    # Try capturing lineups
                     try:
-                        lineups_tab = page.locator(
-                            'a[data-analytics-alias="lineups"]')
-                        lineups_tab.click(timeout=5000, force=True)
-                        page.wait_for_selector('div.lf__lineUp', timeout=5000)
-                        # --- ADD THIS BUFFER ---
-                        # Give React 1 second to fully mount the formation text into the DOM
-                        page.wait_for_timeout(1000)
-                        # -----------------------
+                        lineups_tab = page.locator('a[data-analytics-alias="lineups"]')
+                        if lineups_tab.count() > 0 and lineups_tab.is_visible():
+                            lineups_tab.click(timeout=5000, force=True)
+                            page.wait_for_selector('div.lf__lineUp', timeout=5000)
+                            page.wait_for_timeout(1000)
 
-                        parse_and_save_lineups(page.content(), conn, m['id'])
-                        lineups_success = True
-                    except Exception:
+                            parse_and_save_lineups(page.content(), conn, m['id'])
+                            lineups_success = True
+                        else:
+                            lineups_success = False
+                    except Exception as e:
+                        conn.rollback()
                         lineups_success = False
 
-                    # If we got at least one tab to work, mark it as successful and move on
                     if stats_success or lineups_success:
-                        print(
-                            f"✅ Saved Stats & Lineups: {m['home']} {m['h_score']}-{m['a_score']} {m['away']} ({m['match_stage']})")
+                        print(f"✅ Saved Stats & Lineups: {m['home']} {m['h_score']}-{m['a_score']} {m['away']} ({m['competition']} - {m['match_stage']})")
                         success = True
                         break
                     else:
-                        print(
-                            f"⚠️ Page load too slow for {m['home']} vs {m['away']}. Retrying (Attempt {attempt+1}/2)...")
-                        time.sleep(2)
+                        print(f"⚠️ Missing Stats/Lineups for {m['home']} vs {m['away']}. Skipping deep wait (Attempt {attempt+1}/2)...")
+                        time.sleep(1)
 
                 except Exception as e:
-                    print(
-                        f"⚠️ Network error parsing {m['home']} vs {m['away']}: {e}. Retrying...")
+                    print(f"⚠️ Network error parsing {m['home']} vs {m['away']}: {e}. Retrying...")
                     time.sleep(2)
 
-            # If it completely failed after retries, insert empty row so we don't crash
             if not success:
-                print(
-                    f"❌ Completely failed to extract advanced stats for {m['home']} vs {m['away']}. Saving basic info.")
-                parse_and_save_stats("", conn, m['id'], m['competition'], m['match_stage'],
-                                     m['home'], m['away'], m['h_score'], m['a_score'])
+                print(f"❌ Completely failed to extract advanced stats for {m['home']} vs {m['away']}. Saving basic info.")
+                try:
+                    parse_and_save_stats("", conn, m['id'], m['competition'], m['match_stage'],
+                                         m['home'], m['away'], m['h_score'], m['a_score'])
+                except Exception as e:
+                    conn.rollback()
+                    print(f"❌ Failed to even save basic info for {m['home']} vs {m['away']}: {e}")
 
             time.sleep(1)
 
@@ -543,18 +556,7 @@ def scrape_league(league_name, target_url):
 if __name__ == "__main__":
     try:
         leagues_to_scrape = [
-            {"name": "Premier League",
-                "url": "https://www.flashscore.com/football/england/premier-league/results/"},
-            {"name": "LaLiga",
-                "url": "https://www.flashscore.com/football/spain/laliga/results/"},
-            {"name": "Serie A",
-                "url": "https://www.flashscore.com/football/italy/serie-a/results/"},
-            {"name": "Bundesliga",
-                "url": "https://www.flashscore.com/football/germany/bundesliga/results/"},
-            {"name": "Champions League",
-                "url": "https://www.flashscore.com/football/europe/champions-league/results/"},
-            {"name": "Europa League",
-                "url": "https://www.flashscore.com/football/europe/europa-league/results/"},
+            {"name": "World Championship", "url": "https://www.flashscore.com/football/world/world-championship/results/"}
         ]
 
         for league in leagues_to_scrape:

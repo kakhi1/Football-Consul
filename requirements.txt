@@ -5,3 +5,4 @@ beautifulsoup4
 playwright
 matplotlib
 seaborn
+psycopg2-binary

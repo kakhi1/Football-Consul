@@ -6,3 +6,6 @@ playwright
 matplotlib
 seaborn
 psycopg2-binary
+langgraph
+langchain
+langchain-google-genai

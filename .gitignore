@@ -26,7 +26,7 @@ google-credentials.json
 chart.png
 
 # Added test scripts and scrapers
-test_crash*
-test_flashscore*
-test_headers*
-wc_qualifiers*
+test_crash.py
+test_flashscore_next.py
+test_headers.py
+wc_qualifiers_parser.py

@@ -15,6 +15,7 @@ It uses Playwright and BeautifulSoup to extract match stats and lineups into a l
 - **🪟 Terminal Auto-Open:** Charts automatically pop open in your default Windows photo viewer when running in Terminal mode.
 - **🕷️ Automated Data Extraction:** Scrapes match stats, xG, possession, and lineups using `playwright` and `bs4`.
 - **🗄️ Serverless PostgreSQL Database:** Stores matches, teams, players, and match lineups efficiently in the cloud using Neon.
+- **🤖 LangGraph Multi-Agent Preview:** Automatically finds the next match, acts as a Data Analyst to extract critical insights from historical stats, and utilizes a Preview Agent to write a high-quality tactical narrative.
 
 ---
 
@@ -129,6 +130,16 @@ python app.py
 
 ---
 
+### Step 3: Run the Multi-Agent Match Preview
+
+You can automatically generate a tactical match preview for the next upcoming game. This workflow uses a **Data Analyst Agent** and a **Preview Agent** built on LangGraph to analyze historical stats and write a narrative.
+
+```bash
+python agent_preview.py
+```
+
+---
+
 ## How It Works
 
 1. Playwright scrapes match data.
@@ -136,6 +147,7 @@ python app.py
 3. Data is stored in a structured Postgres database hosted on Neon.
 4. Gemini converts natural language questions into SQL queries.
 5. The bot executes the query and returns an intelligent response.
+6. The `agent_preview.py` LangGraph workflow acts as a Data Analyst and Pundit to automatically preview upcoming matches.
 
 ---
 
@@ -214,6 +226,7 @@ football-consul/
 │
 ├── main_parser.py
 ├── chat.py
+├── agent_preview.py
 ├── requirements.txt
 ├── .env
 └── README.md

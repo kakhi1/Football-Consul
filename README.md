@@ -234,6 +234,7 @@ We are actively exploring several avenues to expand and monetize Football Consul
 
 ## Project Structure (Example)
 
+```
 football-consul/
 │
 ├── main_parser.py

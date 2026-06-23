@@ -198,6 +198,36 @@ def generate_preview(state: AgentState):
     
     return {"preview": response.content}
 
+# Node 5: Save Preview to Database
+def save_preview_to_db(state: AgentState):
+    print("--- SAVING PREVIEW TO DATABASE ---")
+    if state.get("error"):
+        return state
+        
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        
+        query = """
+        INSERT INTO agent_previews (home_team, away_team, match_time, data_insights, preview_text)
+        VALUES (%s, %s, %s, %s, %s)
+        """
+        cursor.execute(query, (
+            state['home_team'], 
+            state['away_team'], 
+            state['match_time'], 
+            state['data_insights'], 
+            state['preview']
+        ))
+        
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Failed to save preview: {e}")
+        # Not returning error to state to avoid failing the final output, just logging it
+        
+    return state
+
 # Conditional edges
 def check_for_errors(state: AgentState):
     if state.get("error"):
@@ -214,6 +244,11 @@ def check_for_errors_analysis(state: AgentState):
         return END
     return "generate_preview"
 
+def check_for_errors_preview(state: AgentState):
+    if state.get("error"):
+        return END
+    return "save_preview_to_db"
+
 # Build the Graph
 workflow = StateGraph(AgentState)
 
@@ -221,12 +256,14 @@ workflow.add_node("fetch_next_match", fetch_next_match)
 workflow.add_node("gather_team_stats", gather_team_stats)
 workflow.add_node("analyze_data", analyze_data)
 workflow.add_node("generate_preview", generate_preview)
+workflow.add_node("save_preview_to_db", save_preview_to_db)
 
 workflow.add_edge(START, "fetch_next_match")
 workflow.add_conditional_edges("fetch_next_match", check_for_errors)
 workflow.add_conditional_edges("gather_team_stats", check_for_errors_stats)
 workflow.add_conditional_edges("analyze_data", check_for_errors_analysis)
-workflow.add_edge("generate_preview", END)
+workflow.add_conditional_edges("generate_preview", check_for_errors_preview)
+workflow.add_edge("save_preview_to_db", END)
 
 # Compile
 app = workflow.compile()

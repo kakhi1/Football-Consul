@@ -16,6 +16,7 @@ It uses Playwright and BeautifulSoup to extract match stats and lineups into a l
 - **🕷️ Automated Data Extraction:** Scrapes match stats, xG, possession, and lineups using `playwright` and `bs4`.
 - **🗄️ Serverless PostgreSQL Database:** Stores matches, teams, players, and match lineups efficiently in the cloud using Neon.
 - **🤖 LangGraph Multi-Agent Preview:** Automatically finds the next match, acts as a Data Analyst to extract critical insights from historical stats, and utilizes a Preview Agent to write a high-quality tactical narrative.
+- **🌐 AI Match Previews Website:** A sleek, premium static website that displays full Markdown-rendered match previews, served dynamically via a custom Flask API.
 
 ---
 
@@ -140,6 +141,18 @@ python agent_preview.py
 
 ---
 
+### Step 4: Run the API and View the Website
+
+To see your generated AI previews on the sleek, interactive website:
+
+1. Start the Flask API server:
+   ```bash
+   python api.py
+   ```
+2. Open the `web/index.html` file in your browser. The website will automatically fetch the latest predictions from your PostgreSQL database and display them using a premium UI with animations and full Markdown rendering.
+
+---
+
 ## How It Works
 
 1. Playwright scrapes match data.
@@ -221,12 +234,16 @@ We are actively exploring several avenues to expand and monetize Football Consul
 
 ## Project Structure (Example)
 
-```
 football-consul/
 │
 ├── main_parser.py
-├── chat.py
+├── app.py
 ├── agent_preview.py
+├── api.py
+├── web/
+│   ├── index.html
+│   ├── styles.css
+│   └── app.js
 ├── requirements.txt
 ├── .env
 └── README.md

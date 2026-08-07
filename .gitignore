@@ -30,3 +30,6 @@ test_crash.py
 test_flashscore_next.py
 test_headers.py
 wc_qualifiers_parser.py
+deploy_script.py
+deploy.zip
+.zip

@@ -777,7 +777,7 @@ def run_telegram_bot():
     # app = ApplicationBuilder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
     app = (
         ApplicationBuilder()
-        .token("YOUR_TOKEN_HERE")  # Keep your existing token
+        .token(os.getenv("TELEGRAM_BOT_TOKEN"))  # Keep your existing token
         .read_timeout(30)
         .write_timeout(30)
         .connect_timeout(30)
